@@ -70,7 +70,12 @@ jobs:
           git rm -q --cached --ignore-unmatch data/memebot.db data/memebot.log
           git add data/memebot.db.enc
           git diff --cached --quiet || git commit -q -m "memebot state $(date -u +%F' '%H:%M)"
-          git push -q
+          # Code changes may have been pushed while this run was going: rebase onto them.
+          for i in 1 2 3; do
+            git pull -q --rebase origin "${GITHUB_REF_NAME}" && git push -q && exit 0
+            sleep $((i * 5))
+          done
+          exit 1
 
       - name: Build dashboard page (encrypted)
         if: always()
