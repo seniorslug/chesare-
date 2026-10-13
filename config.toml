@@ -23,25 +23,39 @@ nansen_every_hours = 4
 
 [universe]
 max_token_age_days = 30
-min_market_cap_usd = 300000
-max_market_cap_usd = 50000000
+# Nansen scan floor. A $10M ATH that is now 70% down is $3M, so scan from $3M.
+min_market_cap_usd = 3000000
+max_market_cap_usd = 1000000000
 min_liquidity_usd = 75000
 # Nansen smart money labels to count. Options: Fund, Smart Trader,
 # 30D Smart Trader, 90D Smart Trader, 180D Smart Trader
 smart_money_labels = ["Fund", "Smart Trader", "30D Smart Trader", "90D Smart Trader"]
 
 [entry]
-# Smart money side: net buying over the window
-min_sm_netflow_24h_usd = 10000
-min_sm_trader_count = 3
-# Price side: price falling while they buy (the divergence)
-max_price_change_24h_pct = -15.0   # price must be down at least 15% over 24h
-max_price_change_6h_pct = 0.0      # and not already bouncing over 6h
-min_price_change_24h_pct = -80.0   # but a >80% collapse looks like a rug: skip
-min_liquidity_to_mcap = 0.02       # pool must be at least 2% of market cap
-# Entry score 0-100 (breadth, intensity, persistence, buying now, divergence,
-# stabilizing, liquidity). Only buy at or above this. See bot/strategy.py.
-min_entry_score = 55
+# --- ATH pullback zone (all from 1-minute candle BODY closes, never wicks) ---
+min_ath_mcap_usd = 10000000     # coin must have reached at least a $10M market cap
+min_drawdown_pct = 61.8         # latest 1m close at least 61.8% below ATH close...
+max_drawdown_pct = 70.0         # ...and no more than 70% below
+# Support: no 1m close below the 70% line since the ATH, and price has held
+# inside the zone for at least this long before we buy.
+min_hours_in_zone = 1.0
+
+# --- Smart money accumulation (the divergence) ---
+accumulation_window = "7d"      # 24h, 7d or 30d: window for the supply % below
+min_sm_supply_pct = 0.5         # smart money net bought >= 0.5% of supply in the window
+require_sm_buying_24h = true    # and is still net buying over the last 24h
+require_price_dropping = true   # while price fell over the same window
+min_sm_trader_count = 3         # distinct smart wallets
+
+min_liquidity_to_mcap = 0.02    # pool must be at least 2% of market cap
+# Coins that pass every rule are ranked by a 0-100 score (supply bought, wallets,
+# persistence across scans, buying now, time holding the zone, ...). 0 = rules
+# alone decide; raise it later if the signal lab shows high scores do better.
+min_entry_score = 0
+# Candle checks use the free GeckoTerminal API (~30 requests/min, ~4 per coin),
+# so only the top N coins by smart money supply bought get checked per scan.
+max_candle_checks = 15
+
 # Optional extra check per coin with Nansen flow intelligence. Off by default:
 # each check is one more call, and it only runs if max_calls_per_run leaves room.
 confirm_with_flow_intelligence = false
@@ -65,7 +79,9 @@ assumed_fee_pct = 1.0            # paper mode: GMGN/priority fees
 [exit]
 trailing_stop_pct = 25.0         # sell when price falls this far from its peak since entry
 trailing_activation_pct = 0.0    # trail only after this gain (0 = trail from entry)
-hard_stop_loss_pct = 35.0        # safety floor; in live mode also placed as a GMGN stop order
+# Support break: sell when a 1m candle CLOSES below the 70%-from-ATH line.
+exit_on_support_break = true
+hard_stop_loss_pct = 35.0        # backstop; in live mode also placed as a GMGN stop order
 # Follow smart money out
 exit_on_sm_outflow = true
 sm_exit_window = "24h"           # 1h, 24h or 7d

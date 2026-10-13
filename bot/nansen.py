@@ -58,8 +58,8 @@ class Nansen:
 
     def smart_money_netflows(self, chain: str, max_age_days: int, min_mcap: float,
                              max_mcap: float, labels: list[str], min_traders: int,
-                             per_page: int = 100) -> list[dict]:
-        """Young tokens ranked by 24h smart money net inflow."""
+                             per_page: int = 100, window: str = "24h") -> list[dict]:
+        """Young tokens ranked by smart money net inflow over `window` (1h, 24h, 7d, 30d)."""
         body = {
             "chains": [chain],
             "filters": {
@@ -71,7 +71,7 @@ class Nansen:
                 "trader_count": {"min": min_traders},
             },
             "pagination": {"page": 1, "per_page": per_page},
-            "order_by": [{"field": "net_flow_24h_usd", "direction": "DESC"}],
+            "order_by": [{"field": f"net_flow_{window}_usd", "direction": "DESC"}],
         }
         return self._post("/smart-money/netflow", body).get("data", [])
 

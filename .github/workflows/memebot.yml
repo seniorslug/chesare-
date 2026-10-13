@@ -21,7 +21,7 @@ env:
 jobs:
   trade:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 15
     steps:
       - name: Check secrets
         run: |

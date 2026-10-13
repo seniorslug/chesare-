@@ -32,6 +32,7 @@ class Quote:
     buys_24h: int = 0
     sells_24h: int = 0
     volume_24h: float = 0.0
+    pair_address: str = ""
 
 
 def _f(x, default=0.0) -> float:
@@ -65,6 +66,7 @@ def parse_pairs(token: str, pairs: list[dict]) -> Quote | None:
         buys_1h=int(_f(h1.get("buys"))), sells_1h=int(_f(h1.get("sells"))),
         buys_24h=int(_f(h24.get("buys"))), sells_24h=int(_f(h24.get("sells"))),
         volume_24h=_f((best.get("volume") or {}).get("h24")),
+        pair_address=best.get("pairAddress", ""),
     )
 
 

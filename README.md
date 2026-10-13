@@ -4,27 +4,27 @@ Buys young memecoins (≤30 days old) that Nansen smart money is **accumulating 
 
 ## How it decides
 
-**Entry** (each run), all must be true:
-1. Nansen smart money netflow: token ≤ 30 days old, $300k–$50M market cap, ≥ $10k net smart money buying over 24h from ≥ 3 smart wallets
-2. DexScreener: price down ≥ 15% over 24h and not already up over 6h; ≥ $75k liquidity; pool also ≤ 30 days old
-3. Optional (off by default): a per-coin Nansen flow intelligence check, if the call cap leaves room
+Looks for coins that smart money is **quietly accumulating while price pulls back into the 61.8–70% zone below its all-time high**, and only buys if that zone is holding.
 
-Coins that pass get an **entry score from 0 to 100**, and the bot only buys at 55 or above:
-- Breadth (20): how many distinct smart wallets are buying
-- Intensity (20): net buying as a % of market cap
-- Persistence (20): also accumulating in earlier scans and over the past week
-- Buying now (10): smart money still net buying in the last hour
-- Divergence (15): a real price drop, but not a rug-like collapse
-- Stabilizing (10): price no longer falling hard in the last hour
-- Liquidity (5): pool depth relative to market cap
+All price levels use **1-minute candle body closes** (free GeckoTerminal data), never wicks.
 
-**Signal lab:** every scored coin is followed for 3 days (bought or not), and the dashboard compares returns by score. Once there are ~30 coins on each side of the threshold, that shows whether the score works and which way to adjust it. Uses free price data only.
+**Entry** (every Nansen scan, every 4h). All must be true:
+1. Token ≤ 30 days old, ≥ 3 distinct smart wallets, smart money still net buying over 24h
+2. **ATH market cap ≥ $10M** (highest 1m close × supply)
+3. **Latest 1m close is 61.8–70% below the ATH close**
+4. **Support holds:** no 1m close below the 70% line since the ATH, and price has been in the zone ≥ 1 hour
+5. **Divergence:** price fell over the past 7 days while smart money net bought **≥ 0.5% of total supply** in that window (USD flow ÷ the window's average price, so the dip doesn't inflate it)
+6. Liquidity ≥ $75k and ≥ 2% of market cap
 
-**Exit** (prices checked every 2 min), first hit wins:
-- Hard stop: −35% from entry (in live mode also placed on GMGN, so it fires even if the bot is down)
+Coins that pass are ranked by a 0–100 score: % of supply bought (25), number of wallets (20), persistence across scans (20), time holding the zone (15), still buying in the last hour (10), not dumping now (5), liquidity (5).
+
+**Exit**, first hit wins:
+- **Support broken:** any 1m candle closes below the 70%-from-ATH line
 - Trailing stop: 25% below the highest price since entry
 - Smart money exits: smart money net flow over 24h below −$5k
-- Max hold: 14 days
+- Hard stop −35% (backstop) · max hold 14 days
+
+**Signal lab:** every coin that gets a candle check is followed for 3 days, bought or not. The dashboard compares coins that passed every rule with near-misses, so you can see whether the rules are adding value.
 
 Risk limits: $50 per trade, max 5 open, stops new entries after −$150 in a day, 24h cooldown before re-buying a coin.
 

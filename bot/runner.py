@@ -6,7 +6,10 @@ import time
 
 import requests
 
+import os
+
 from . import strategy
+from .candles import CandleError, Gecko, closes_since, zone_for_pool
 from .gmgn import SOL_MINT, Gmgn, GmgnError
 from .nansen import Nansen, NansenError
 from .prices import get_quotes
@@ -20,6 +23,7 @@ class Bot:
         self.cfg = cfg
         self.store = Store(cfg.data_dir / "memebot.db")
         self.nansen = Nansen(cfg.nansen_api_key, cfg["nansen"]["max_calls_per_run"])
+        self.gecko = Gecko()
         self.mode = "live" if cfg.is_live else "paper"
         self.gmgn = None
         if self.mode == "live":
@@ -46,7 +50,7 @@ class Bot:
         return time.mktime((t.tm_year, t.tm_mon, t.tm_mday, 0, 0, 0, 0, 0, -1))
 
     def scan(self) -> None:
-        cfg, r = self.cfg, self.cfg["risk"]
+        cfg, r, e = self.cfg, self.cfg["risk"], self.cfg["entry"]
         open_pos = {p.token for p in self.store.positions()}
         # Even when we can't buy, scanning keeps the scan memory and signal lab fed.
         blocked = None
@@ -58,25 +62,39 @@ class Bot:
         if self.nansen.calls_left < 1:
             log.info("Scan skipped: Nansen call cap for this run already used")
             return
-        u = cfg["universe"]
+        u, win = cfg["universe"], e["accumulation_window"]
         rows = self.nansen.smart_money_netflows(
             "solana", u["max_token_age_days"], u["min_market_cap_usd"], u["max_market_cap_usd"],
-            u["smart_money_labels"], cfg["entry"]["min_sm_trader_count"])
+            u["smart_money_labels"], e["min_sm_trader_count"], window=win)
         now = time.time()
-        log.info("Nansen returned %d young tokens with smart money activity", len(rows))
         streaks = self.store.streaks(before=now)
         self.store.record_scan(rows, now)
         if not rows:
+            self._summary(len(rows), 0, 0, 0, 0)
             return
         quotes = get_quotes([row["token_address"] for row in rows])
-        candidates, rejected = strategy.screen(rows, quotes, cfg, streaks)
-        qualified = [c for c in candidates if c.qualified]
-        log.info("%d pass hard filters, %d score >= %s, %d rejected", len(candidates), len(qualified),
-                 cfg["entry"]["min_entry_score"], len(rejected))
+        shortlist, rejected = strategy.prefilter(rows, quotes, cfg)
+        shortlist = shortlist[: e["max_candle_checks"]]
+        log.info("Nansen: %d tokens; %d worth a candle check, %d rejected early",
+                 len(rows), len(shortlist), len(rejected))
+
+        # Candle checks (GeckoTerminal, free but rate-limited).
+        evaluated = []      # (candidate|None, fails, features, row, quote)
+        for row in shortlist:
+            q = quotes[row["token_address"]]
+            z = zone_for_pool(self.gecko, q.pair_address, time.time(),
+                              e["min_drawdown_pct"], e["max_drawdown_pct"])
+            c, fails, feats = strategy.evaluate(row, q, z, streaks.get(q.token, 0), cfg)
+            evaluated.append((c, fails, feats, row, q))
+            if fails:
+                log.info("  %s: %s", q.symbol, "; ".join(fails))
+        qualified = sorted((x[0] for x in evaluated if x[0] and x[0].qualified),
+                           key=lambda c: c.score, reverse=True)
+        in_zone = sum(1 for x in evaluated if e["min_drawdown_pct"] <= x[2]["drawdown_pct"] <= e["max_drawdown_pct"])
 
         bought: set[str] = set()
         cooldown = r["reentry_cooldown_hours"] * 3600
-        confirm = cfg["entry"]["confirm_with_flow_intelligence"]
+        confirm = e["confirm_with_flow_intelligence"]
         for c in qualified:
             if blocked:
                 log.info("Not buying: %s", blocked)
@@ -90,26 +108,36 @@ class Bot:
                     log.info("  %s not confirmed: no Nansen calls left this run", c.symbol)
                     break
                 try:
-                    flow = self.nansen.flow_intelligence("solana", c.token, cfg["entry"]["confirm_timeframe"])
-                except NansenError as e:
-                    log.warning("Confirm failed for %s: %s", c.symbol, e)
+                    flow = self.nansen.flow_intelligence("solana", c.token, e["confirm_timeframe"])
+                except NansenError as err:
+                    log.warning("Confirm failed for %s: %s", c.symbol, err)
                     continue
                 ok, note = strategy.confirmed(flow, cfg)
                 c.detail["confirm"] = note
                 if not ok:
-                    self.store.log_signal(c.token, c.symbol, False, c.detail)
                     log.info("  %s rejected at confirmation (%s)", c.symbol, note)
                     continue
             if self.open_position(c):
                 open_pos.add(c.token)
                 bought.add(c.token)
 
-        # Record signals and feed the lab: every scored coin, bought or not.
+        # Record every candle-checked coin: signals list + signal lab (bought or not).
         tracked = {row["token"] for row in self.store.lab_open()}
-        for c in candidates[: cfg["lab"]["track_per_scan"]]:
-            self.store.log_signal(c.token, c.symbol, c.token in bought, c.detail)
-            if c.token not in tracked:
-                self.store.lab_add(c, c.token in bought)
+        for c, fails, feats, row, q in evaluated[: cfg["lab"]["track_per_scan"]]:
+            took = q.token in bought
+            self.store.log_signal(q.token, q.symbol, took, feats)
+            if q.token not in tracked:
+                self.store.lab_add(q.token, q.symbol, feats["score"], not fails, took, q.price_usd, feats)
+        self._summary(len(rows), len(shortlist), in_zone, len(qualified), len(bought))
+
+    def _summary(self, scanned, checked, in_zone, qualified, bought) -> None:
+        """One line of counts (no coin names) that shows up on the public GitHub run page."""
+        msg = (f"Scan: {scanned} tokens from Nansen, {checked} candle-checked, {in_zone} in the "
+               f"61.8-70% zone, {qualified} passed every rule, {bought} bought. "
+               f"GeckoTerminal calls: {self.gecko.calls}")
+        log.info(msg)
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            print(f"::notice title=memebot::{msg}", flush=True)
 
     def update_lab(self) -> None:
         """Fill in each tracked coin's return 4h / 24h / 72h after it was scored. Free."""
@@ -169,13 +197,17 @@ class Bot:
             self.store.set("cash", cash - size)
         d = c.detail
         streak = d.get("streak", 0)
-        reason = (f"Score {c.score:.0f}/100: SM +${c.sm_netflow_24h:,.0f}/24h "
-                  f"({d.get('intensity_pct', 0):.1f}% of mcap) from {c.sm_traders} wallets"
-                  f"{f', seen in {streak} earlier scan' + ('s' if streak != 1 else '') if streak else ''}"
-                  f" while price {c.quote.change_24h:+.1f}%/24h"
+        reason = (f"{d.get('drawdown_pct', 0):.1f}% below ATH (ATH mcap ${d.get('ath_mcap', 0) / 1e6:.1f}M), "
+                  f"held the zone {d.get('hours_in_zone', 0):.0f}h; SM bought {d.get('sm_supply_pct', 0):.2f}% "
+                  f"of supply over {d.get('sm_window', '')} from {c.sm_traders} wallets while price "
+                  f"{d.get('price_window_pct', 0):+.0f}%"
+                  f"{f'; seen in {streak} earlier scan' + ('s' if streak != 1 else '') if streak else ''}"
+                  f". Score {c.score:.0f}/100"
                   f"{'; ' + d['confirm'] if d.get('confirm') else ''}")
         pos = Position(c.token, c.symbol, fill, size, size / fill, time.time(), fill,
-                       reason, stop_id, time.time())
+                       reason, stop_id, time.time(), price,
+                       pool=d.get("pool", ""), support_price=d.get("support_price", 0.0),
+                       ath_price=d.get("ath_close", 0.0), last_candle_ts=time.time())
         self.store.save_position(pos)
         self.store.log_trade(c.token, c.symbol, "buy", fill, size, 0.0, reason, self.mode)
         self.notify(f"🟢 [{self.mode.upper()}] BUY {c.symbol} ${size:.0f} @ ${fill:.8g}\n{reason}\n{c.quote.pair_url}")
@@ -212,11 +244,30 @@ class Bot:
             p.last_price = q.price_usd
             if p.token in sm:
                 p.last_sm_check = now
-            why = strategy.exit_reason(p, q.price_usd, now, self.cfg, sm.get(p.token))
+            why = self._support_break(p, now) or strategy.exit_reason(p, q.price_usd, now, self.cfg, sm.get(p.token))
             if why:
                 self.close_position(p, q.price_usd, why)
             else:
                 self.store.save_position(p)
+
+    def _support_break(self, p: Position, now: float) -> str | None:
+        """Sell if any 1m candle closed below the support line since the last check."""
+        if not (self.cfg["exit"].get("exit_on_support_break") and p.pool and p.support_price):
+            return None
+        try:
+            mins = closes_since(self.gecko, p.pool, p.last_candle_ts or p.opened_at, now)
+        except CandleError as e:
+            log.warning("Support check failed for %s: %s", p.symbol, e)
+            return None
+        if mins:
+            p.last_candle_ts = mins[-1][0] + 60
+        below = [m for m in mins if m[4] < p.support_price]
+        if below:
+            m = below[0]
+            dd = (1 - m[4] / p.ath_price) * 100 if p.ath_price else 0
+            return (f"support broken: 1m close ${m[4]:.6g} is {dd:.1f}% below ATH "
+                    f"(line ${p.support_price:.6g}), {(m[4] / p.entry_price - 1) * 100:+.1f}% from entry")
+        return None
 
     def close_position(self, p: Position, price: float, why: str) -> None:
         if self.mode == "live":

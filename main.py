@@ -37,14 +37,23 @@ def doctor(cfg) -> None:
     n = Nansen(cfg.nansen_api_key)
     u = cfg["universe"]
     rows = n.smart_money_netflows("solana", u["max_token_age_days"], u["min_market_cap_usd"],
-                                  u["max_market_cap_usd"], u["smart_money_labels"], 1, per_page=25)
+                                  u["max_market_cap_usd"], u["smart_money_labels"], 1, per_page=25,
+                                  window=cfg["entry"]["accumulation_window"])
     print(f"✓ Nansen OK — {len(rows)} young Solana tokens with smart money flows")
     quotes = get_quotes([r["token_address"] for r in rows])
     print(f"✓ DexScreener OK — prices for {len(quotes)}/{len(rows)}")
-    passed, rejected = strategy.screen(rows, quotes, cfg)
-    print(f"\nPassing divergence screen right now: {len(passed)}")
-    for c in passed[:10]:
-        print(f"  {c.symbol:10} SM +${c.sm_netflow_24h:>10,.0f}  price {c.quote.change_24h:+6.1f}%/24h  score {c.score:.2f}")
+    shortlist, rejected = strategy.prefilter(rows, quotes, cfg)
+    print(f"\nWorth a candle check: {len(shortlist)}")
+    from bot.candles import Gecko, zone_for_pool
+    import time as _t
+    g, e = Gecko(), cfg["entry"]
+    for r in shortlist[:5]:
+        qq = quotes[r["token_address"]]
+        z = zone_for_pool(g, qq.pair_address, _t.time(), e["min_drawdown_pct"], e["max_drawdown_pct"])
+        c, fails, f = strategy.evaluate(r, qq, z, 0, cfg)
+        status = "PASS" if c else "fail: " + "; ".join(fails)
+        print(f"  {qq.symbol:10} {f['drawdown_pct']:5.1f}% below ATH  SM {f['sm_supply_pct']:.2f}% supply  {status}")
+    print(f"✓ GeckoTerminal OK — {g.calls} candle requests" if g.calls else "")
     print("\nTop rejects (why):")
     for r in rejected[:8]:
         print(f"  {r['symbol']:10} {', '.join(r['why'])}")

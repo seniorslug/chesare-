@@ -28,10 +28,12 @@ def lab_stats(rows: list[dict], min_score: float) -> dict:
                for lab, lo, hi in BUCKETS]
     recent = [{"ts": r["ts"], "token": r["token"], "symbol": r["symbol"], "score": r["score"],
                "bought": bool(r["bought"]), "r4h": r["r4h"], "r24h": r["r24h"], "r72h": r["r72h"],
-               "parts": r["features"].get("parts", {})} for r in rows[:12]]
+               "parts": r["features"].get("parts", {}), "qualified": bool(r["qualified"]),
+               "dd": r["features"].get("drawdown_pct"), "fails": r["features"].get("fails", [])}
+              for r in rows[:12]]
     return {"buckets": buckets, "recent": recent, "total": len(rows), "min_score": min_score,
-            "qualified": summarize([r for r in rows if r["score"] >= min_score]),
-            "below": summarize([r for r in rows if r["score"] < min_score])}
+            "qualified": summarize([r for r in rows if r["qualified"]]),
+            "below": summarize([r for r in rows if not r["qualified"]])}
 
 
 def collect(store: Store, cfg) -> dict:
@@ -72,7 +74,7 @@ def collect(store: Store, cfg) -> dict:
             "pnl_pct": (last / p.entry_price - 1) * 100,
             "peak_pct": (p.peak_price / p.entry_price - 1) * 100,
             "drawdown_pct": (1 - last / p.peak_price) * 100 if p.peak_price else 0,
-            "reason": p.entry_reason,
+            "reason": p.entry_reason, "support": p.support_price, "ath": p.ath_price,
         })
 
     wins = [c for c in closed if c["pnl"] > 0]
@@ -288,7 +290,7 @@ footer{margin-top:28px;color:var(--muted);font-size:12px;line-height:1.6}
 
   <section class="card">
     <h2>Signal lab <small id="lab-sub"></small></h2>
-    <div class="sub" style="margin:-4px 0 10px">Every coin that passes the filters is followed for 3 days, bought or not. This shows whether higher entry scores really lead to better returns.</div>
+    <div class="sub" style="margin:-4px 0 10px">Every coin that gets a candle check is followed for 3 days, bought or not. Compares coins that passed every rule with near-misses, and returns by score.</div>
     <div id="lab-verdict"></div>
     <div class="tbl"><table id="lab"></table></div>
     <h2 style="margin-top:16px">Recently scored</h2>
@@ -296,7 +298,7 @@ footer{margin-top:28px;color:var(--muted);font-size:12px;line-height:1.6}
   </section>
 
   <section class="card">
-    <h2>Recent signals <small>coins that passed the screen</small></h2>
+    <h2>Recent signals <small>coins that got a candle check</small></h2>
     <div class="tbl"><table id="signals"></table></div>
   </section>
 
@@ -436,7 +438,7 @@ $("open").innerHTML = D.open.length ? D.open.map(p => {
     <div class="pos-top"><span class="sym"><a href="${dex(p.token)}" target="_blank" rel="noopener">${esc(p.symbol)}</a></span>
       <span class="mono ${cls(p.pnl)}" style="font-weight:600">${usd(p.pnl,true)} (${pct(p.pnl_pct)})</span></div>
     <div class="row"><span>Entry <b class="mono">${price(p.entry)}</b></span><span>Now <b class="mono">${price(p.last)}</b></span><span>Peak <b class="mono">${pct(p.peak_pct)}</b></span><span>Held <b>${held(p.opened)}</b></span></div>
-    <div class="row"><span>Trailing stop at <b class="mono">${price(trailAt)}</b> (${p.drawdown_pct.toFixed(1)}% of ${D.rules.trail}% used)</span></div>
+    <div class="row"><span>Trailing stop at <b class="mono">${price(trailAt)}</b> (${p.drawdown_pct.toFixed(1)}% of ${D.rules.trail}% used)</span>${p.support ? `<span>Support (70% below ATH) <b class="mono">${price(p.support)}</b> · ${pct((p.support / p.last - 1) * 100)} away</span>` : ""}</div>
     <div class="bar" title="Position between hard stop (left) and peak (right)"><i style="left:0;width:${Math.min(Math.max(at,2),100).toFixed(1)}%;background:${p.pnl >= 0 ? "var(--good-mark)" : "var(--bad-mark)"}"></i></div>
     <div class="why">${esc(p.reason)}</div>
   </div>`;
@@ -455,13 +457,13 @@ $("closed").innerHTML = D.closed.length ? `<thead><tr><th>Coin</th><th class="n"
 const L = D.lab;
 $("lab-sub").textContent = `${L.total} coins tracked`;
 const pctOr = v => v == null ? '<span class="flat">—</span>' : `<span class="${cls(v)}">${pct(v)}</span>`;
-const scoreTag = v => `<span class="score ${v >= L.min_score ? "hi" : ""}">${Math.round(v)}</span>`;
+const scoreTag = (v, hi) => `<span class="score ${hi ? "hi" : ""}">${Math.round(v)}</span>`;
 (() => {
   const q = L.qualified, b = L.below;
   let msg;
-  if (q.n24 < 10 || b.n24 < 10) msg = `<b>Still collecting data.</b> ${q.n24 + b.n24} coins have a 24h result so far. Give it about 30 per side (above and below the buy threshold of ${L.min_score}) before trusting the comparison.`;
-  else if (q.avg24 > b.avg24) msg = `<b>Score is working:</b> coins scoring ${L.min_score}+ averaged ${pct(q.avg24)} after 24h vs ${pct(b.avg24)} for lower scores (${q.n24} vs ${b.n24} coins).`;
-  else msg = `<b>Score isn't separating yet:</b> ${L.min_score}+ coins averaged ${pct(q.avg24)} after 24h vs ${pct(b.avg24)} for lower scores. The weights may need changing.`;
+  if (q.n24 < 10 || b.n24 < 10) msg = `<b>Still collecting data.</b> ${q.n24} coins that passed every rule and ${b.n24} that missed one have a 24h result. Give it about 30 of each before trusting the comparison.`;
+  else if (q.avg24 > b.avg24) msg = `<b>Rules are working:</b> coins passing every rule averaged ${pct(q.avg24)} after 24h vs ${pct(b.avg24)} for coins that missed one (${q.n24} vs ${b.n24} coins).`;
+  else msg = `<b>Rules aren't beating the near-misses yet:</b> passing coins averaged ${pct(q.avg24)} after 24h vs ${pct(b.avg24)} for coins that missed a rule. Worth revisiting the thresholds.`;
   $("lab-verdict").innerHTML = `<div class="verdict">${msg}</div>`;
 })();
 $("lab").innerHTML = `<thead><tr><th>Score</th><th class="n">Coins</th><th class="n">Avg 24h</th><th class="n">Up after 24h</th><th class="n hide-sm">Avg 72h</th><th class="n hide-sm">Best / worst</th></tr></thead><tbody>` +
@@ -469,19 +471,19 @@ $("lab").innerHTML = `<thead><tr><th>Score</th><th class="n">Coins</th><th class
     <td class="n mono">${pctOr(k.avg24)}</td><td class="n mono">${k.up24 == null ? "—" : Math.round(k.up24) + "%"}</td>
     <td class="n mono hide-sm">${pctOr(k.avg72)}</td><td class="n mono hide-sm">${pctOr(k.best)} / ${pctOr(k.worst)}</td></tr>`).join("") + "</tbody>";
 $("lab-recent").innerHTML = L.recent.length ? `<thead><tr><th>Coin</th><th class="n">Score</th><th class="n">4h</th><th class="n">24h</th><th class="n hide-sm">72h</th></tr></thead><tbody>` +
-  L.recent.map(r => `<tr><td><a href="${dex(r.token)}" target="_blank" rel="noopener" style="color:inherit">${esc(r.symbol)}</a> ${r.bought ? '<span class="tag">bought</span>' : ""}<div class="reason">${ago(r.ts)}</div></td>
-    <td class="n" title="${esc(Object.entries(r.parts).map(([k,v]) => k + " " + v).join(", "))}">${scoreTag(r.score)}</td>
+  L.recent.map(r => `<tr><td><a href="${dex(r.token)}" target="_blank" rel="noopener" style="color:inherit">${esc(r.symbol)}</a> ${r.bought ? '<span class="tag">bought</span>' : r.qualified ? '<span class="tag">passed</span>' : ""}<div class="reason">${ago(r.ts)}${r.dd != null ? " · " + r.dd.toFixed(1) + "% below ATH" : ""}</div>${r.fails.length ? `<div class="reason">✗ ${esc(r.fails[0])}</div>` : ""}</td>
+    <td class="n" title="${esc(Object.entries(r.parts).map(([k,v]) => k + " " + v).join(", "))}">${scoreTag(r.score, r.qualified)}</td>
     <td class="n mono">${pctOr(r.r4h)}</td><td class="n mono">${pctOr(r.r24h)}</td><td class="n mono hide-sm">${pctOr(r.r72h)}</td></tr>`).join("") + "</tbody>"
   : '<tbody><tr><td class="empty">Nothing scored yet. The next Nansen scan fills this in.</td></tr></tbody>';
 
 // ---------- signals ----------
-$("signals").innerHTML = D.signals.length ? `<thead><tr><th>Coin</th><th class="n">SM net 24h</th><th class="n">Price 24h</th><th class="n">Score</th><th class="n hide-sm">Wallets</th><th>When</th></tr></thead><tbody>` +
+$("signals").innerHTML = D.signals.length ? `<thead><tr><th>Coin</th><th class="n">SM supply</th><th class="n">Below ATH</th><th class="n">Score</th><th class="n hide-sm">Wallets</th><th>When</th></tr></thead><tbody>` +
   D.signals.map(s => { const d = s.detail || {}; return `<tr><td><a href="${dex(s.token)}" target="_blank" rel="noopener" style="color:inherit">${esc(s.symbol)}</a> ${s.taken ? '<span class="tag">bought</span>' : '<span class="tag">skipped</span>'}</td>
-    <td class="n mono">${d.sm_netflow_24h != null ? usd(d.sm_netflow_24h, true) : "—"}</td>
-    <td class="n mono ${cls(d.price_24h)}">${pct(d.price_24h)}</td><td class="n">${d.score != null ? scoreTag(d.score) : "—"}</td><td class="n hide-sm">${d.sm_traders ?? "—"}</td><td>${ago(s.ts)}</td></tr>`; }).join("") + "</tbody>"
+    <td class="n mono">${d.sm_supply_pct != null ? d.sm_supply_pct.toFixed(2) + "%" : "—"}</td>
+    <td class="n mono">${d.drawdown_pct != null ? d.drawdown_pct.toFixed(1) + "%" : "—"}</td><td class="n">${d.score != null ? scoreTag(d.score, !(d.fails || []).length) : "—"}</td><td class="n hide-sm">${d.sm_traders ?? "—"}</td><td>${ago(s.ts)}</td></tr>`; }).join("") + "</tbody>"
   : '<tbody><tr><td class="empty">No signals yet.</td></tr></tbody>';
 
-$("rules").innerHTML = `Rules: $${D.rules.size} per trade, max ${D.rules.max_open} open · trailing stop ${D.rules.trail}% from peak · hard stop −${D.rules.stop}% · sell when smart money net flow over ${D.rules.sm_window} is below ${usd(D.rules.sm_exit)}.<br>` +
+$("rules").innerHTML = `Entry: ATH market cap ≥ $10M, latest 1m close 61.8–70% below the ATH close, no close below the 70% line, smart money bought ≥ 0.5% of supply while price fell.<br>Exits: $${D.rules.size} per trade, max ${D.rules.max_open} open · 1m close below the 70% line · trailing stop ${D.rules.trail}% from peak · hard stop −${D.rules.stop}% · sell when smart money net flow over ${D.rules.sm_window} is below ${usd(D.rules.sm_exit)}.<br>` +
   `Prices refresh every run (about every 30 min). ${S.next_nansen ? "Next Nansen scan " + (S.next_nansen*1000 < Date.now() ? "on the next run" : "around " + when(S.next_nansen)) + "." : ""} ${D.mode === "paper" ? "Paper trades: fills include an assumed 4% round-trip slippage and fees." : ""}`;
 
 if (!P.plain) { $("rules").insertAdjacentHTML("beforeend", '<br><a href="#" id="lockbtn" style="color:var(--text-2)">Lock on this device</a>');

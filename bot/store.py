@@ -21,6 +21,10 @@ class Position:
     gmgn_stop_id: str = ""
     last_sm_check: float = 0.0
     last_price: float = 0.0
+    pool: str = ""
+    support_price: float = 0.0
+    ath_price: float = 0.0
+    last_candle_ts: float = 0.0
 
 
 SCHEMA = """
@@ -112,12 +116,12 @@ class Store:
         return {t: n for t, n in rows}
 
     # signal lab
-    def lab_add(self, c, bought: bool) -> None:
+    def lab_add(self, token, symbol, score, qualified: bool, bought: bool, price0, features: dict) -> None:
         self.db.execute(
             "INSERT INTO lab (ts, token, symbol, score, qualified, bought, price0, features, max72, min72) "
             "VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (time.time(), c.token, c.symbol, c.score, int(c.qualified), int(bought),
-             c.quote.price_usd, json.dumps(c.detail), 0.0, 0.0))
+            (time.time(), token, symbol, score, int(qualified), int(bought), price0,
+             json.dumps(features), 0.0, 0.0))
         self.db.commit()
 
     def lab_open(self) -> list[dict]:
