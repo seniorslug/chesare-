@@ -3,7 +3,7 @@
 All levels use candle BODY CLOSES on 1-minute candles, never wicks:
   - ATH = highest 1m close since the pool started
   - drawdown = how far the latest 1m close is below that ATH
-  - support holds = no 1m close below the max-drawdown line (e.g. 70%) since the ATH
+  - support holds = no 1m close below the max-drawdown line (e.g. 76%) since the ATH
 
 Pulling every 1m candle for 30 days would take ~45 requests per coin, so we use
 hourly candles to find the only hours that could matter, then fetch 1m candles

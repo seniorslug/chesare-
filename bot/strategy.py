@@ -1,18 +1,18 @@
 """The trading rules. Pure functions so they can be tested without any API.
 
 Entry: smart money silently accumulating a coin that has pulled back into the
-61.8-70% zone below its all-time high and is holding there.
+61.8-76% zone (config) below its all-time high and is holding there.
   1. Prefilter (free): age, smart wallets, still buying in 24h, liquidity, and an
      upper bound on % of supply bought, so only real contenders get candle checks.
   2. Candles (1m body closes, see candles.py): ATH market cap >= $10M, latest close
-     61.8-70% below ATH, no close below the 70% line since the ATH, held in the zone
+     61.8-76% below ATH, no close below the 76% line since the ATH, held in the zone
      for a minimum time, price down over the accumulation window.
   3. Smart money net bought >= 0.5% of supply over the window (priced at the
      window's average price, so a dip doesn't inflate it).
   4. Score 0-100 ranks qualifying coins (and feeds the signal lab).
 
 Exit (first one that triggers):
-  - support broken: a 1m close below the 70%-from-ATH line (checked in runner)
+  - support broken: a 1m close below the max-drawdown line (76% from ATH) (checked in runner)
   - hard stop loss from entry (backstop)
   - trailing stop from the peak since entry
   - smart money turns net seller (follow them out)

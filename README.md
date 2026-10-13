@@ -4,22 +4,22 @@ Buys young memecoins (≤30 days old) that Nansen smart money is **accumulating 
 
 ## How it decides
 
-Looks for coins that smart money is **quietly accumulating while price pulls back into the 61.8–70% zone below its all-time high**, and only buys if that zone is holding.
+Looks for coins that smart money is **quietly accumulating while price pulls back into the 61.8–76% zone below its all-time high**, and only buys if that zone is holding.
 
 All price levels use **1-minute candle body closes** (free GeckoTerminal data), never wicks.
 
 **Entry** (every Nansen scan, every 4h). All must be true:
 1. Token ≤ 30 days old, ≥ 3 distinct smart wallets, smart money still net buying over 24h
 2. **ATH market cap ≥ $10M** (highest 1m close × supply)
-3. **Latest 1m close is 61.8–70% below the ATH close**
-4. **Support holds:** no 1m close below the 70% line since the ATH, and price has been in the zone ≥ 1 hour
+3. **Latest 1m close is 61.8–76% below the ATH close**
+4. **Support holds:** no 1m close below the 76% line since the ATH, and price has been in the zone ≥ 1 hour
 5. **Divergence:** price fell over the past 7 days while smart money net bought **≥ 0.5% of total supply** in that window (USD flow ÷ the window's average price, so the dip doesn't inflate it)
 6. Liquidity ≥ $75k and ≥ 2% of market cap
 
 Coins that pass are ranked by a 0–100 score: % of supply bought (25), number of wallets (20), persistence across scans (20), time holding the zone (15), still buying in the last hour (10), not dumping now (5), liquidity (5).
 
 **Exit**, first hit wins:
-- **Support broken:** any 1m candle closes below the 70%-from-ATH line
+- **Support broken:** any 1m candle closes below the 76%-from-ATH line
 - Trailing stop: 25% below the highest price since entry
 - Smart money exits: smart money net flow over 24h below −$5k
 - Hard stop −35% (backstop) · max hold 14 days

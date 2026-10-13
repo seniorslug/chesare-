@@ -23,8 +23,8 @@ nansen_every_hours = 4
 
 [universe]
 max_token_age_days = 30
-# Nansen scan floor. A $10M ATH that is now 70% down is $3M, so scan from $3M.
-min_market_cap_usd = 3000000
+# Nansen scan floor. A $10M ATH that is now 76% down is $2.4M, so scan from $2.4M.
+min_market_cap_usd = 2400000
 max_market_cap_usd = 1000000000
 min_liquidity_usd = 75000
 # Nansen smart money labels to count. Options: Fund, Smart Trader,
@@ -35,8 +35,8 @@ smart_money_labels = ["Fund", "Smart Trader", "30D Smart Trader", "90D Smart Tra
 # --- ATH pullback zone (all from 1-minute candle BODY closes, never wicks) ---
 min_ath_mcap_usd = 10000000     # coin must have reached at least a $10M market cap
 min_drawdown_pct = 61.8         # latest 1m close at least 61.8% below ATH close...
-max_drawdown_pct = 70.0         # ...and no more than 70% below
-# Support: no 1m close below the 70% line since the ATH, and price has held
+max_drawdown_pct = 76.0         # ...and no more than 76% below
+# Support: no 1m close below the 76% line since the ATH, and price has held
 # inside the zone for at least this long before we buy.
 min_hours_in_zone = 1.0
 
@@ -79,7 +79,7 @@ assumed_fee_pct = 1.0            # paper mode: GMGN/priority fees
 [exit]
 trailing_stop_pct = 25.0         # sell when price falls this far from its peak since entry
 trailing_activation_pct = 0.0    # trail only after this gain (0 = trail from entry)
-# Support break: sell when a 1m candle CLOSES below the 70%-from-ATH line.
+# Support break: sell when a 1m candle CLOSES below the max-drawdown line (76% below ATH).
 exit_on_support_break = true
 hard_stop_loss_pct = 35.0        # backstop; in live mode also placed as a GMGN stop order
 # Follow smart money out

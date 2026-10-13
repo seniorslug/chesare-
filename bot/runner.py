@@ -133,7 +133,7 @@ class Bot:
     def _summary(self, scanned, checked, in_zone, qualified, bought) -> None:
         """One line of counts (no coin names) that shows up on the public GitHub run page."""
         msg = (f"Scan: {scanned} tokens from Nansen, {checked} candle-checked, {in_zone} in the "
-               f"61.8-70% zone, {qualified} passed every rule, {bought} bought. "
+               f"{self.cfg['entry']['min_drawdown_pct']}-{self.cfg['entry']['max_drawdown_pct']:g}% zone, {qualified} passed every rule, {bought} bought. "
                f"GeckoTerminal calls: {self.gecko.calls}")
         log.info(msg)
         if os.environ.get("GITHUB_ACTIONS") == "true":

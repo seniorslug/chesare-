@@ -102,6 +102,8 @@ def collect(store: Store, cfg) -> dict:
             "trail": x["trailing_stop_pct"], "stop": x["hard_stop_loss_pct"],
             "sm_exit": x["sm_exit_netflow_usd"], "sm_window": x["sm_exit_window"],
             "size": cfg["risk"]["position_size_usd"], "max_open": cfg["risk"]["max_open_positions"],
+            "min_dd": cfg["entry"]["min_drawdown_pct"], "max_dd": cfg["entry"]["max_drawdown_pct"],
+            "min_ath": cfg["entry"]["min_ath_mcap_usd"], "min_supply": cfg["entry"]["min_sm_supply_pct"],
         },
         "open": open_rows,
         "closed": list(reversed(closed)),
@@ -438,7 +440,7 @@ $("open").innerHTML = D.open.length ? D.open.map(p => {
     <div class="pos-top"><span class="sym"><a href="${dex(p.token)}" target="_blank" rel="noopener">${esc(p.symbol)}</a></span>
       <span class="mono ${cls(p.pnl)}" style="font-weight:600">${usd(p.pnl,true)} (${pct(p.pnl_pct)})</span></div>
     <div class="row"><span>Entry <b class="mono">${price(p.entry)}</b></span><span>Now <b class="mono">${price(p.last)}</b></span><span>Peak <b class="mono">${pct(p.peak_pct)}</b></span><span>Held <b>${held(p.opened)}</b></span></div>
-    <div class="row"><span>Trailing stop at <b class="mono">${price(trailAt)}</b> (${p.drawdown_pct.toFixed(1)}% of ${D.rules.trail}% used)</span>${p.support ? `<span>Support (70% below ATH) <b class="mono">${price(p.support)}</b> · ${pct((p.support / p.last - 1) * 100)} away</span>` : ""}</div>
+    <div class="row"><span>Trailing stop at <b class="mono">${price(trailAt)}</b> (${p.drawdown_pct.toFixed(1)}% of ${D.rules.trail}% used)</span>${p.support ? `<span>Support (${D.rules.max_dd}% below ATH) <b class="mono">${price(p.support)}</b> · ${pct((p.support / p.last - 1) * 100)} away</span>` : ""}</div>
     <div class="bar" title="Position between hard stop (left) and peak (right)"><i style="left:0;width:${Math.min(Math.max(at,2),100).toFixed(1)}%;background:${p.pnl >= 0 ? "var(--good-mark)" : "var(--bad-mark)"}"></i></div>
     <div class="why">${esc(p.reason)}</div>
   </div>`;
@@ -483,7 +485,7 @@ $("signals").innerHTML = D.signals.length ? `<thead><tr><th>Coin</th><th class="
     <td class="n mono">${d.drawdown_pct != null ? d.drawdown_pct.toFixed(1) + "%" : "—"}</td><td class="n">${d.score != null ? scoreTag(d.score, !(d.fails || []).length) : "—"}</td><td class="n hide-sm">${d.sm_traders ?? "—"}</td><td>${ago(s.ts)}</td></tr>`; }).join("") + "</tbody>"
   : '<tbody><tr><td class="empty">No signals yet.</td></tr></tbody>';
 
-$("rules").innerHTML = `Entry: ATH market cap ≥ $10M, latest 1m close 61.8–70% below the ATH close, no close below the 70% line, smart money bought ≥ 0.5% of supply while price fell.<br>Exits: $${D.rules.size} per trade, max ${D.rules.max_open} open · 1m close below the 70% line · trailing stop ${D.rules.trail}% from peak · hard stop −${D.rules.stop}% · sell when smart money net flow over ${D.rules.sm_window} is below ${usd(D.rules.sm_exit)}.<br>` +
+$("rules").innerHTML = `Entry: ATH market cap ≥ $${(D.rules.min_ath/1e6).toFixed(0)}M, latest 1m close ${D.rules.min_dd}–${D.rules.max_dd}% below the ATH close, no close below the ${D.rules.max_dd}% line, smart money bought ≥ ${D.rules.min_supply}% of supply while price fell.<br>Exits: $${D.rules.size} per trade, max ${D.rules.max_open} open · 1m close below the ${D.rules.max_dd}% line · trailing stop ${D.rules.trail}% from peak · hard stop −${D.rules.stop}% · sell when smart money net flow over ${D.rules.sm_window} is below ${usd(D.rules.sm_exit)}.<br>` +
   `Prices refresh every run (about every 30 min). ${S.next_nansen ? "Next Nansen scan " + (S.next_nansen*1000 < Date.now() ? "on the next run" : "around " + when(S.next_nansen)) + "." : ""} ${D.mode === "paper" ? "Paper trades: fills include an assumed 4% round-trip slippage and fees." : ""}`;
 
 if (!P.plain) { $("rules").insertAdjacentHTML("beforeend", '<br><a href="#" id="lockbtn" style="color:var(--text-2)">Lock on this device</a>');

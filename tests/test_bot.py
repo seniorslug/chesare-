@@ -32,7 +32,7 @@ def zone(ath=2.9, last=1.0, held=True, hours=6.0, avg7d=1.5, chg7d=-40.0, ok=Tru
     return Zone(ok=ok, ath_close=ath, ath_ts=time.time() - 5 * 86400, last_close=last,
                 drawdown_pct=(1 - last / ath) * 100,
                 max_drawdown_pct=(1 - (deepest or last) / ath) * 100,
-                support_price=ath * 0.30, zone_top_price=ath * 0.382, held_support=held,
+                support_price=ath * 0.24, zone_top_price=ath * 0.382, held_support=held,
                 hours_in_zone=hours, avg_close={"24h": 1.05, "7d": avg7d, "30d": 1.8, "1h": 1.0},
                 price_change={"24h": -5.0, "7d": chg7d, "30d": -20.0, "1h": 0.0})
 
@@ -133,7 +133,8 @@ class RuleTests(unittest.TestCase):
         cases = {
             "ATH mcap": (row(GOOD), q(GOOD), zone(ath=1.8, last=0.65)),          # ATH $9M
             "needs 61.8": (row(GOOD), q(GOOD), zone(last=1.3)),                  # only 55% down
-            "support at 70": (row(GOOD), q(GOOD), zone(held=False, deepest=0.8)),
+            "support at 76": (row(GOOD), q(GOOD), zone(held=False, deepest=0.6)),
+            "needs 61.8–76": (row(GOOD), q(GOOD), zone(last=0.6)),             # 79% down: past the zone
             "in zone": (row(GOOD), q(GOOD), zone(hours=0.4)),
             "not dropping": (row(GOOD), q(GOOD), zone(chg7d=12)),
             "of supply": (row(GOOD, nf7d=40_000), q(GOOD), zone(avg7d=1.9)),     # 0.42%
@@ -143,6 +144,11 @@ class RuleTests(unittest.TestCase):
             c, fails, _ = strategy.evaluate(r, qq, z, 0, self.cfg)
             self.assertIsNone(c, needle)
             self.assertTrue(any(needle in f for f in fails), f"{needle}: {fails}")
+
+    def test_deeper_pullback_to_76_now_qualifies(self):
+        c, fails, f = strategy.evaluate(row(GOOD), q(GOOD, price=0.75), zone(last=0.75), 0, self.cfg)
+        self.assertEqual(fails, [], fails)                   # 74% below ATH: inside 61.8-76
+        self.assertAlmostEqual(f["drawdown_pct"], 74.14, places=1)
 
     def test_score_rewards_more_supply_wallets_and_holding(self):
         _, _, weak = strategy.evaluate(row(GOOD, traders=3, nf1h=-100), q(GOOD), zone(hours=1.5), 0, self.cfg)
@@ -234,17 +240,17 @@ class BotTests(unittest.TestCase):
         pos = bot.store.positions()
         self.assertEqual([p.token for p in pos], [GOOD])
         p = pos[0]
-        self.assertAlmostEqual(p.support_price, 2.9 * 0.30)
+        self.assertAlmostEqual(p.support_price, 2.9 * 0.24)
         self.assertIn("below ATH", p.entry_reason)
         self.assertIn("% of supply", p.entry_reason)
         lab = bot.store.lab_all()
         self.assertEqual(len(lab), 1)
         self.assertTrue(lab[0]["qualified"] and lab[0]["bought"])
 
-        # A 1m candle closes below the 70% line -> sell, even though no stop was hit yet.
+        # A 1m candle closes below the 76% line (0.696) -> sell.
         t = time.time()
-        self.minute_closes = [(t - 120, 0, 0, 0, 0.90), (t - 60, 0, 0, 0, 0.86)]
-        self.prices["p"] = 0.86
+        self.minute_closes = [(t - 120, 0, 0, 0, 0.75), (t - 60, 0, 0, 0, 0.69)]
+        self.prices["p"] = 0.69
         bot.run_once()
         self.assertEqual(bot.store.positions(), [])
         sell = [x for x in bot.store.trades() if x["side"] == "sell"][0]
