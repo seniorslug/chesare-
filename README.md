@@ -24,6 +24,8 @@ Coins that pass are ranked by a 0–100 score: % of supply bought (25), number o
 - Smart money exits: smart money net flow over 24h below −$5k
 - Hard stop −35% (backstop) · max hold 14 days
 
+**Why the bot bought:** the dashboard has a section for every trade showing the bot's reasoning in plain English, a checklist of each entry rule (what it required, what the coin showed, met or not met), the score breakdown, and what the bot watched for after buying. New buys save their checklist and the rule thresholds in force at the time. Buys made before this existed are rebuilt from the signal log and use today's thresholds (the page says so); if neither exists, only the original one-line summary is shown.
+
 **Signal lab:** every coin that gets a candle check is followed for 3 days, bought or not. The dashboard compares coins that passed every rule with near-misses, so you can see whether the rules are adding value.
 
 Risk limits: $50 per trade, max 5 open, stops new entries after −$150 in a day, 24h cooldown before re-buying a coin.

@@ -209,7 +209,9 @@ class Bot:
                        pool=d.get("pool", ""), support_price=d.get("support_price", 0.0),
                        ath_price=d.get("ath_close", 0.0), last_candle_ts=time.time())
         self.store.save_position(pos)
-        self.store.log_trade(c.token, c.symbol, "buy", fill, size, 0.0, reason, self.mode)
+        # Keep the full checklist with the trade so the dashboard can explain exactly why it bought.
+        detail = dict(d, thresholds=strategy.entry_thresholds(self.cfg), signal_price=price)
+        self.store.log_trade(c.token, c.symbol, "buy", fill, size, 0.0, reason, self.mode, detail)
         self.notify(f"🟢 [{self.mode.upper()}] BUY {c.symbol} ${size:.0f} @ ${fill:.8g}\n{reason}\n{c.quote.pair_url}")
         return True
 

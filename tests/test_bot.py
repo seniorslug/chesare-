@@ -195,6 +195,75 @@ class ExitTests(unittest.TestCase):
         self.assertAlmostEqual(x.pair_age_days, 5, places=1)
 
 
+def buy_score(bot) -> float:
+    import json
+    buy = [x for x in bot.store.trades() if x["side"] == "buy"][0]
+    return json.loads(buy["detail"])["score"]
+
+
+class ReasoningTests(unittest.TestCase):
+    """The per-trade explanation: checklist, story and fallbacks."""
+
+    def setUp(self):
+        from bot.reasoning import entry_checks, entry_story
+        self.cfg = load_settings()
+        self.t = strategy.entry_thresholds(self.cfg)
+        _, fails, self.d = strategy.evaluate(row(GOOD), q(GOOD), zone(), 2, self.cfg)
+        self.assertEqual(fails, [])
+        self.checks, self.story = entry_checks, entry_story
+
+    def test_all_rules_met_for_a_passing_coin(self):
+        checks = self.checks(self.d, self.t)
+        self.assertTrue(all(c["met"] is True for c in checks))
+        self.assertEqual({"age", "wallets", "buying24", "ath", "zone", "support", "hours", "dropping",
+                          "supply", "liq", "liqratio"}, {c["key"] for c in checks})
+
+    def test_unmet_and_unrecorded_checks_are_reported(self):
+        d = dict(self.d, drawdown_pct=50.0, held_support=False, sm_supply_pct=0.2)
+        d.pop("liquidity")
+        by = {c["key"]: c for c in self.checks(d, self.t)}
+        self.assertIs(by["zone"]["met"], False)
+        self.assertIs(by["support"]["met"], False)
+        self.assertIs(by["supply"]["met"], False)
+        self.assertIsNone(by["liq"]["met"])
+        self.assertEqual(by["liq"]["actual"], "not recorded")
+        story = self.story("GOOD", d, self.t, list(by.values()))
+        self.assertIn("not met", story[-1])
+
+    def test_thresholds_come_from_the_snapshot_not_todays_config(self):
+        strict = dict(self.t, min_sm_supply_pct=50.0)
+        by = {c["key"]: c for c in self.checks(self.d, strict)}
+        self.assertIs(by["supply"]["met"], False)
+        self.assertIn("50% of supply", by["supply"]["rule"])
+
+    def test_story_mentions_the_divergence_and_support(self):
+        text = " ".join(self.story("GOOD", self.d, self.t, self.checks(self.d, self.t)))
+        self.assertIn("net bought about", text)
+        self.assertIn("while its price fell", text)
+        self.assertIn("support", text)
+        self.assertIn("2 earlier scans", text)
+
+    def test_score_max_matches_the_scoring_code(self):
+        self.assertEqual(sum(strategy.SCORE_MAX.values()), 100)
+        for k, v in self.d["parts"].items():
+            self.assertLessEqual(v, strategy.SCORE_MAX[k] + 1e-9, k)
+
+    def test_old_database_gets_the_detail_column(self):
+        import sqlite3
+        from bot.store import Store
+        path = Path(tempfile.mkdtemp()) / "old.db"
+        db = sqlite3.connect(path)
+        db.execute("CREATE TABLE trades (id INTEGER PRIMARY KEY, token TEXT, symbol TEXT, side TEXT, price REAL, "
+                   "usd REAL, pnl_usd REAL, reason TEXT, ts REAL, mode TEXT)")
+        db.execute("INSERT INTO trades (token, symbol, side, price, usd, pnl_usd, reason, ts, mode) "
+                   "VALUES ('T','OLD','buy',1,50,0,'r',1,'paper')")
+        db.commit(); db.close()
+        s = Store(path)
+        s.log_trade("T", "OLD", "sell", 2, 100, 50, "x", "paper")
+        rows = s.trades()
+        self.assertEqual([r["detail"] for r in rows], [None, None])
+
+
 class BotTests(unittest.TestCase):
     """Full paper cycle with fake APIs: scan -> buy -> support break / trailing -> lab -> dashboard."""
 
@@ -286,6 +355,57 @@ class BotTests(unittest.TestCase):
         bot.run_once(force_nansen=True)
         sell = [x for x in bot.store.trades() if x["side"] == "sell"][0]
         self.assertIn("smart money exiting", sell["reason"])
+
+    def test_buy_saves_checklist_and_dashboard_explains_it(self):
+        from bot.dashboard import collect
+        bot, cfg = self.make_bot()
+        bot.run_once(force_nansen=True)
+        buy = [x for x in bot.store.trades() if x["side"] == "buy"][0]
+        self.assertIn('"thresholds"', buy["detail"])             # checklist saved with the trade
+        cards = collect(bot.store, cfg)["trade_log"]
+        self.assertEqual(len(cards), 1)
+        c = cards[0]
+        self.assertEqual((c["symbol"], c["status"], c["source"]), ("GOOD", "open", "recorded"))
+        self.assertGreaterEqual(len(c["checks"]), 11)
+        self.assertTrue(all(k["met"] is True for k in c["checks"]), c["checks"])
+        self.assertTrue(c["story"][-1].startswith(f"All {len(c['checks'])} entry checks were met"))
+        self.assertAlmostEqual(sum(p["value"] for p in c["score_parts"]), buy_score(bot), delta=1.0)
+        self.assertTrue(any("support" in x["text"] for x in c["exit_plan"]))
+
+    def test_closed_trade_card_has_outcome(self):
+        from bot.dashboard import collect
+        bot, cfg = self.make_bot()
+        bot.run_once(force_nansen=True)
+        self.prices["p"] = 2.2
+        bot.run_once()
+        self.prices["p"] = 1.6
+        bot.run_once()
+        c = collect(bot.store, cfg)["trade_log"][0]
+        self.assertEqual(c["status"], "closed")
+        self.assertIn("trailing", c["exit_reason"])
+        self.assertGreater(c["pnl"], 20)
+
+    def test_older_buy_is_explained_from_signal_log(self):
+        from bot.dashboard import collect
+        bot, cfg = self.make_bot()
+        bot.run_once(force_nansen=True)
+        bot.store.db.execute("UPDATE trades SET detail = NULL")   # as saved before trades kept detail
+        bot.store.db.commit()
+        c = collect(bot.store, cfg)["trade_log"][0]
+        self.assertEqual(c["source"], "signal log")
+        self.assertTrue(c["thresholds_today"])
+        self.assertTrue(c["checks"] and all(k["met"] for k in c["checks"]))
+
+    def test_buy_with_no_saved_detail_falls_back_to_summary(self):
+        from bot.dashboard import collect
+        bot, cfg = self.make_bot()
+        bot.run_once(force_nansen=True)
+        bot.store.db.execute("UPDATE trades SET detail = NULL")
+        bot.store.db.execute("DELETE FROM signals")
+        bot.store.db.commit()
+        c = collect(bot.store, cfg)["trade_log"][0]
+        self.assertEqual((c["source"], c["checks"], c["story"]), ("none", [], []))
+        self.assertIn("below ATH", c["reason"])
 
     def test_lab_fills_forward_returns(self):
         bot, cfg = self.make_bot()

@@ -31,7 +31,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS positions (token TEXT PRIMARY KEY, data TEXT);
 CREATE TABLE IF NOT EXISTS trades (
   id INTEGER PRIMARY KEY, token TEXT, symbol TEXT, side TEXT, price REAL,
-  usd REAL, pnl_usd REAL, reason TEXT, ts REAL, mode TEXT);
+  usd REAL, pnl_usd REAL, reason TEXT, ts REAL, mode TEXT, detail TEXT);
 CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT);
 CREATE TABLE IF NOT EXISTS scans (
   ts REAL, token TEXT, nf1h REAL, nf24h REAL, nf7d REAL, traders INTEGER);
@@ -49,6 +49,14 @@ class Store:
     def __init__(self, path: Path):
         self.db = sqlite3.connect(path)
         self.db.executescript(SCHEMA)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Bring databases saved by older versions up to date (CREATE IF NOT EXISTS won't add columns)."""
+        cols = {r[1] for r in self.db.execute("PRAGMA table_info(trades)")}
+        if "detail" not in cols:
+            self.db.execute("ALTER TABLE trades ADD COLUMN detail TEXT")
+            self.db.commit()
 
     # positions
     def positions(self) -> list[Position]:
@@ -63,11 +71,13 @@ class Store:
         self.db.commit()
 
     # trades
-    def log_trade(self, token, symbol, side, price, usd, pnl, reason, mode) -> None:
+    def log_trade(self, token, symbol, side, price, usd, pnl, reason, mode, detail: dict | None = None) -> None:
+        """`detail` (buys only): the entry checklist as the bot saw it, so the dashboard can explain the buy."""
         self.db.execute(
-            "INSERT INTO trades (token, symbol, side, price, usd, pnl_usd, reason, ts, mode) "
-            "VALUES (?,?,?,?,?,?,?,?,?)",
-            (token, symbol, side, price, usd, pnl, reason, time.time(), mode))
+            "INSERT INTO trades (token, symbol, side, price, usd, pnl_usd, reason, ts, mode, detail) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (token, symbol, side, price, usd, pnl, reason, time.time(), mode,
+             json.dumps(detail) if detail else None))
         self.db.commit()
 
     def trades(self) -> list[sqlite3.Row]:
@@ -94,6 +104,11 @@ class Store:
             "SELECT ts, token, symbol, taken, detail FROM signals ORDER BY ts DESC LIMIT ?", (limit,))
         return [{"ts": r[0], "token": r[1], "symbol": r[2], "taken": bool(r[3]),
                  "detail": json.loads(r[4] or "{}")} for r in rows]
+
+    def taken_signals(self) -> list[dict]:
+        """Every signal the bot acted on (oldest first). Used to explain buys made before trades stored their own detail."""
+        rows = self.db.execute("SELECT ts, token, detail FROM signals WHERE taken = 1 ORDER BY ts")
+        return [{"ts": r[0], "token": r[1], "detail": json.loads(r[2] or "{}")} for r in rows]
 
     def add_equity_point(self, equity: float, keep: int = 3000) -> None:
         hist = self.get("equity_history", [])

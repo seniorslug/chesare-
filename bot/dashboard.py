@@ -8,6 +8,8 @@ import os
 import time
 from pathlib import Path
 
+from . import strategy
+from .reasoning import build_trade_cards
 from .store import Store
 
 
@@ -107,6 +109,7 @@ def collect(store: Store, cfg) -> dict:
         },
         "open": open_rows,
         "closed": list(reversed(closed)),
+        "trade_log": build_trade_cards(trades, store.taken_signals(), positions, strategy.entry_thresholds(cfg)),
         "equity": store.get("equity_history", []),
         "signals": store.signals(30),
         "lab": lab_stats(store.lab_all(), cfg["entry"].get("min_entry_score", 0)),
@@ -236,6 +239,28 @@ td.n,th.n{text-align:right}
 [hidden]{display:none!important}
 footer{margin-top:28px;color:var(--muted);font-size:12px;line-height:1.6}
 @media(max-width:560px){.hide-sm{display:none}}
+details.trade{padding:0;margin-bottom:10px}
+details.trade>summary{list-style:none;cursor:pointer;padding:14px 16px;display:flex;justify-content:space-between;align-items:flex-start;gap:6px 14px;flex-wrap:wrap}
+details.trade>summary::-webkit-details-marker{display:none}
+details.trade>summary:focus-visible{outline:2px solid var(--series);outline-offset:-2px;border-radius:14px}
+.t-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.t-head::before{content:"\25B8";color:var(--muted);display:inline-block;transition:transform .15s}
+details.trade[open] .t-head::before{transform:rotate(90deg)}
+.tag.good{color:var(--good);border-color:var(--good)} .tag.bad{color:var(--bad);border-color:var(--bad)}
+.t-body{padding:0 16px 16px;border-top:1px solid var(--border)}
+.t-body h3{font-size:12px;font-weight:600;color:var(--text-2);text-transform:uppercase;letter-spacing:.04em;margin:16px 0 6px}
+.story p{margin:8px 0;font-size:14px;line-height:1.55;color:var(--text-2)}
+.story p:last-child{color:var(--text);font-weight:500}
+.chk{font-weight:600;font-size:12px;white-space:nowrap}
+.chk.ok{color:var(--good)} .chk.no{color:var(--bad)} .chk.na{color:var(--muted)}
+.sp{display:grid;grid-template-columns:minmax(120px,1.4fr) 2fr 44px;gap:4px 10px;align-items:center;font-size:12px;color:var(--text-2);margin:5px 0}
+.sp .trk{height:6px;border-radius:3px;background:var(--surface-2);overflow:hidden}
+.sp .trk i{display:block;height:100%;border-radius:3px;background:var(--series)}
+.plan{margin:0;padding-left:18px;font-size:13px;color:var(--text-2)}
+.plan li{margin:3px 0}
+.note{font-size:12px;color:var(--muted);margin-top:10px}
+.tl-tools{font-weight:400;font-size:12px}
+.tl-tools a{color:var(--text-2);cursor:pointer;margin-left:10px}
 </style>
 </head>
 <body>
@@ -288,6 +313,12 @@ footer{margin-top:28px;color:var(--muted);font-size:12px;line-height:1.6}
   <section class="card">
     <h2>Closed trades <small id="closed-count"></small></h2>
     <div class="tbl"><table id="closed"></table></div>
+  </section>
+
+  <section>
+    <h2>Why the bot bought <small class="tl-tools"><span id="tl-count"></span><a id="tl-open" role="button" tabindex="0">Expand all</a><a id="tl-close" role="button" tabindex="0">Collapse all</a></small></h2>
+    <div class="sub" style="margin:-4px 0 10px">One section per trade. The bot follows fixed rules, so each section is its checklist at the moment it bought: what each rule required, what the coin actually showed, and whether it was met.</div>
+    <div id="tl"></div>
   </section>
 
   <section class="card">
@@ -454,6 +485,42 @@ $("closed").innerHTML = D.closed.length ? `<thead><tr><th>Coin</th><th class="n"
     <td class="n mono hide-sm">${price(c.entry)}</td><td class="n mono hide-sm">${price(c.exit)}</td>
     <td class="n">${held(c.opened, c.closed)}</td></tr>`).join("") + "</tbody>"
   : '<tbody><tr><td class="empty">No closed trades yet.</td></tr></tbody>';
+
+// ---------- why the bot bought (one section per trade) ----------
+const TL = D.trade_log || [];
+$("tl-count").textContent = TL.length ? `${TL.length} trade${TL.length === 1 ? "" : "s"}` : "";
+const mark = m => m === true ? '<span class="chk ok">✓ Met</span>' : m === false ? '<span class="chk no">✗ Not met</span>' : '<span class="chk na">? Not recorded</span>';
+$("tl").innerHTML = TL.length ? TL.map((c, i) => {
+  const total = c.checks.length, ok = c.checks.filter(k => k.met === true).length, bad = c.checks.filter(k => k.met === false).length;
+  const badge = !total ? "" : bad ? `<span class="tag bad">${ok}/${total} checks met</span>` : ok === total ? `<span class="tag good">All ${total} checks met</span>` : `<span class="tag">${ok}/${total} checks met</span>`;
+  const state = c.status === "open" ? '<span class="tag">open</span>' : '<span class="tag">closed</span>';
+  const pnl = c.pnl == null ? "" : `<span class="mono ${cls(c.pnl)}" style="font-weight:600">${usd(c.pnl,true)} (${pct(c.pnl_pct)})</span>`;
+  const outcome = c.status === "closed"
+    ? `Sold ${when(c.closed_at)} at ${price(c.exit_price)} after ${held(c.bought_at, c.closed_at)}: ${esc(c.exit_reason)}`
+    : (c.last ? `Still open, now ${price(c.last)} after ${held(c.bought_at)}.` : "Still open.");
+  const story = c.story.length ? `<h3>The reasoning</h3><div class="story">${c.story.map(p => `<p>${esc(p)}</p>`).join("")}</div>`
+    : `<h3>The reasoning</h3><div class="story"><p>${esc(c.reason) || "No entry details were saved for this trade."}</p></div><div class="note">The full entry checklist wasn't saved for this trade.</div>`;
+  const checks = total ? `<h3>Entry checklist</h3><div class="tbl"><table><thead><tr><th>Check</th><th>What the coin showed</th><th class="n">Result</th></tr></thead><tbody>` +
+    c.checks.map(k => `<tr><td>${esc(k.label)}<div class="reason">Needs: ${esc(k.rule)}</div></td><td class="mono">${esc(k.actual)}</td><td class="n">${mark(k.met)}</td></tr>`).join("") + "</tbody></table></div>" : "";
+  const parts = c.score_parts.length ? `<h3>Score breakdown</h3>` + c.score_parts.map(p =>
+    `<div class="sp"><span>${esc(p.label)}</span><span class="trk" aria-hidden="true"><i style="width:${Math.min(100, p.value / p.max * 100).toFixed(0)}%"></i></span><span class="mono n">${p.value.toFixed(0)}/${p.max}</span></div>`).join("") : "";
+  const plan = c.exit_plan.length ? `<h3>What it watched after buying</h3><ul class="plan">` +
+    c.exit_plan.map(x => `<li>${esc(x.text)}${x.price ? ` <b class="mono">${price(x.price)}</b>` : ""}</li>`).join("") + "</ul>" : "";
+  const src = c.source === "signal log" ? "Rebuilt from the bot's signal log for this buy" + (c.thresholds_today ? "; rule thresholds shown are today's settings." : ".") : "";
+  return `<details class="trade card"${i < 3 ? " open" : ""}>
+    <summary>
+      <div><div class="t-head"><a class="sym" href="${dex(c.token)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${esc(c.symbol)}</a> ${state} ${badge}</div>
+        <div class="reason" style="margin-left:18px">Bought ${when(c.bought_at)} at <span class="mono">${price(c.entry)}</span> · ${usd(c.size)}</div></div>
+      <div>${pnl}</div>
+    </summary>
+    <div class="t-body">${story}${checks}${parts}${plan}
+      <h3>Outcome</h3><div class="story"><p style="color:var(--text);font-weight:400">${outcome}</p></div>
+      ${src ? `<div class="note">${esc(src)}</div>` : ""}</div>
+  </details>`;
+}).join("") : '<div class="card empty">No trades yet. A section appears here for every buy, with the checks it passed.</div>';
+const setAll = open => document.querySelectorAll("details.trade").forEach(x => x.open = open);
+[["tl-open", true], ["tl-close", false]].forEach(([id, v]) => { const a = $(id); a.addEventListener("click", () => setAll(v));
+  a.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setAll(v); } }); });
 
 // ---------- signal lab ----------
 const L = D.lab;

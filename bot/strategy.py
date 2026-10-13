@@ -44,6 +44,31 @@ def _clamp(x: float) -> float:
     return max(0.0, min(1.0, x))
 
 
+# Maximum points for each part of the 0-100 entry score (the weights used in evaluate()).
+# Kept here so the dashboard can show "x of y" without duplicating the numbers.
+SCORE_MAX = {"supply": 25, "breadth": 20, "persistence": 20, "buying_now": 10,
+             "holding": 15, "stabilizing": 5, "liquidity": 5}
+
+
+def entry_thresholds(cfg) -> dict:
+    """The entry and exit settings in force right now. Saved with each buy so the dashboard
+    can show the rules the bot actually used, even if config.toml changes later."""
+    u, e, x = cfg["universe"], cfg["entry"], cfg["exit"]
+    return {
+        "max_token_age_days": u["max_token_age_days"], "min_liquidity_usd": u["min_liquidity_usd"],
+        "min_sm_trader_count": e["min_sm_trader_count"], "require_sm_buying_24h": e["require_sm_buying_24h"],
+        "min_liquidity_to_mcap": e["min_liquidity_to_mcap"], "min_ath_mcap_usd": e["min_ath_mcap_usd"],
+        "min_drawdown_pct": e["min_drawdown_pct"], "max_drawdown_pct": e["max_drawdown_pct"],
+        "min_hours_in_zone": e["min_hours_in_zone"], "require_price_dropping": e["require_price_dropping"],
+        "min_sm_supply_pct": e["min_sm_supply_pct"], "accumulation_window": e["accumulation_window"],
+        "min_entry_score": e.get("min_entry_score", 0),
+        "exit_on_support_break": x["exit_on_support_break"], "trailing_stop_pct": x["trailing_stop_pct"],
+        "hard_stop_loss_pct": x["hard_stop_loss_pct"], "exit_on_sm_outflow": x["exit_on_sm_outflow"],
+        "sm_exit_netflow_usd": x["sm_exit_netflow_usd"], "sm_exit_window": x["sm_exit_window"],
+        "max_hold_days": x["max_hold_days"],
+    }
+
+
 def supply_pct(net_flow_usd: float, q: Quote, avg_price: float | None) -> float:
     """Smart money net buying as % of total supply.
     tokens bought ~= USD / average price over the window; supply = mcap / price."""
