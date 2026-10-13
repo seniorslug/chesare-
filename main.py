@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import sys
 from datetime import datetime
@@ -17,10 +18,14 @@ from bot.config import load_settings
 
 
 def setup_logging(cfg) -> None:
+    console = logging.StreamHandler()
+    if os.environ.get("MEMEBOT_QUIET") == "1":
+        # Public CI logs: hide trades and signals, show only problems.
+        console.setLevel(logging.WARNING)
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",
-        handlers=[logging.StreamHandler(), logging.FileHandler(cfg.data_dir / "memebot.log")])
+        handlers=[console, logging.FileHandler(cfg.data_dir / "memebot.log")])
 
 
 def doctor(cfg) -> None:
@@ -88,7 +93,10 @@ def main() -> None:
     elif cmd == "dashboard":
         from bot.dashboard import build
         from bot.store import Store
-        print(build(Store(cfg.data_dir / "memebot.db"), cfg, cfg.data_dir.parent / "site"))
+        pw = os.environ.get("DASHBOARD_PASSWORD") or None
+        if not pw and os.environ.get("MEMEBOT_QUIET") == "1":
+            sys.exit("DASHBOARD_PASSWORD is not set; refusing to publish trade data unencrypted")
+        print(build(Store(cfg.data_dir / "memebot.db"), cfg, cfg.data_dir.parent / "site", pw))
     elif cmd in ("once", "run"):
         from bot.runner import Bot
         bot = Bot(cfg)

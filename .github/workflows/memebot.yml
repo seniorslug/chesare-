@@ -6,7 +6,7 @@ on:
   workflow_dispatch:          # "Run workflow" button for manual runs
 
 permissions:
-  contents: write             # lets the job save the trade database back to the repo
+  contents: write             # lets the job save the (encrypted) trade database back to the repo
   pages: write                # publish the dashboard
   id-token: write
 
@@ -14,11 +14,22 @@ concurrency:
   group: memebot
   cancel-in-progress: false   # never run two passes at once
 
+env:
+  DASHBOARD_PASSWORD: ${{ secrets.DASHBOARD_PASSWORD }}
+  MEMEBOT_QUIET: "1"          # this repo is public: keep trades out of the run logs
+
 jobs:
   trade:
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
+      - name: Check secrets
+        run: |
+          if [ -z "$DASHBOARD_PASSWORD" ]; then
+            echo "::error::Add a DASHBOARD_PASSWORD secret (Settings > Secrets and variables > Actions). Trading is paused until then so trade data is never saved unencrypted."
+            exit 1
+          fi
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
@@ -28,6 +39,13 @@ jobs:
 
       - run: pip install -r requirements.txt
 
+      - name: Unlock saved state
+        run: |
+          if [ -f data/memebot.db.enc ]; then
+            openssl enc -d -aes-256-cbc -pbkdf2 -iter 310000 -in data/memebot.db.enc -out data/memebot.db -pass env:DASHBOARD_PASSWORD \
+              || { echo "::error::Could not decrypt saved state. Did DASHBOARD_PASSWORD change?"; exit 1; }
+          fi
+
       - name: One manage + scan pass (paper mode)
         env:
           NANSEN_API_KEY: ${{ secrets.NANSEN_API_KEY }}
@@ -36,16 +54,19 @@ jobs:
           LIVE_TRADING_CONFIRM: "no"   # live trading can't run here: GMGN needs a fixed whitelisted IP
         run: python main.py once
 
-      - name: Save positions and trade history
+      - name: Save encrypted state
         if: always()
         run: |
+          [ -f data/memebot.db ] || exit 0
+          openssl enc -aes-256-cbc -pbkdf2 -iter 310000 -salt -in data/memebot.db -out data/memebot.db.enc -pass env:DASHBOARD_PASSWORD
           git config user.name "memebot"
           git config user.email "memebot@users.noreply.github.com"
-          git add data/memebot.db data/memebot.log || true
-          git diff --cached --quiet || git commit -m "memebot state $(date -u +%F' '%H:%M)"
-          git push
+          git rm -q --cached --ignore-unmatch data/memebot.db data/memebot.log
+          git add data/memebot.db.enc
+          git diff --cached --quiet || git commit -q -m "memebot state $(date -u +%F' '%H:%M)"
+          git push -q
 
-      - name: Build dashboard page
+      - name: Build dashboard page (encrypted)
         if: always()
         run: python main.py dashboard
 
@@ -55,9 +76,7 @@ jobs:
           path: site
 
   dashboard:
-    # Publishes site/index.html to GitHub Pages. Needs Pages turned on
-    # (Settings -> Pages -> Source: GitHub Actions). Until then this job
-    # fails on its own without affecting trading.
+    # Publishes site/index.html to GitHub Pages (Settings -> Pages -> Source: GitHub Actions).
     needs: trade
     if: always()
     continue-on-error: true

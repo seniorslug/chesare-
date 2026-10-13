@@ -52,6 +52,9 @@ Or run one pass every 5 minutes from cron instead: `*/5 * * * * cd ~/memebot && 
 
 It then runs every 30 minutes and commits the trade database back to the repo, so `python main.py report` works on any copy you pull. Every 30 min uses roughly 1,500 of the 2,000 free monthly minutes a private repo gets. Positions are only checked every 30 min, so trailing-stop exits are slower and rougher than on an always-on server. Live trading can't run here, because GMGN needs a fixed whitelisted IP.
 
+### Dashboard password
+The dashboard page and the saved trade database are encrypted with the `DASHBOARD_PASSWORD` secret (AES-256). The page asks for it and decrypts in your browser. Run logs only show warnings, so trades stay private even though the repo is public. Changing the password later needs the saved state re-encrypted, so ask before changing it.
+
 ### Phone alerts (optional)
 Create a Telegram bot with @BotFather, put the token and your chat ID in `.env`. You'll get a message on every buy and sell.
 

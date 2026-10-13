@@ -1,7 +1,10 @@
 """Builds a single self-contained dashboard page (site/index.html) from the trade database."""
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
+import os
 import time
 from pathlib import Path
 
@@ -82,10 +85,24 @@ def collect(store: Store, cfg) -> dict:
     }
 
 
-def build(store: Store, cfg, out_dir: Path) -> Path:
+PBKDF2_ITERS = 310_000
+
+
+def encrypt(plaintext: bytes, password: str) -> dict:
+    """AES-256-GCM with a PBKDF2-SHA256 key; the browser reverses it with WebCrypto."""
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    salt, iv = os.urandom(16), os.urandom(12)
+    key = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, PBKDF2_ITERS, 32)
+    ct = AESGCM(key).encrypt(iv, plaintext, None)  # ciphertext + 16-byte tag
+    b64 = lambda b: base64.b64encode(b).decode()
+    return {"salt": b64(salt), "iv": b64(iv), "iter": PBKDF2_ITERS, "ct": b64(ct)}
+
+
+def build(store: Store, cfg, out_dir: Path, password: str | None = None) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
-    data = json.dumps(collect(store, cfg), default=float).replace("</", "<\\/")
-    html = TEMPLATE.replace("__DATA__", data)
+    data = json.dumps(collect(store, cfg), default=float)
+    payload = {"enc": encrypt(data.encode(), password)} if password else {"plain": json.loads(data)}
+    html = TEMPLATE.replace("__PAYLOAD__", json.dumps(payload).replace("</", "<\\/"))
     path = out_dir / "index.html"
     path.write_text(html)
     return path
@@ -175,12 +192,33 @@ td.n,th.n{text-align:right}
 .tag{display:inline-block;font-size:11px;padding:1px 7px;border-radius:999px;border:1px solid var(--border);color:var(--text-2)}
 .legend{display:flex;gap:14px;font-size:12px;color:var(--text-2);margin-top:6px}
 .legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+.lock{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px 16px}
+.lock form{width:100%;max-width:340px}
+.lock h1{font-size:22px;margin-bottom:4px}
+.lock input[type=password]{width:100%;font:inherit;font-size:16px;padding:12px 14px;border-radius:10px;border:1px solid var(--border);background:var(--surface);color:var(--text);margin-top:16px}
+.lock input:focus{outline:2px solid var(--series);outline-offset:1px}
+.lock button{width:100%;font:inherit;font-weight:600;font-size:16px;padding:12px;border-radius:10px;border:0;background:var(--text);color:var(--bg);margin-top:10px;cursor:pointer}
+.lock button:disabled{opacity:.6}
+.lock label.rem{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-2);margin-top:12px}
+.lock .err{color:var(--bad);font-size:13px;min-height:18px;margin-top:8px}
+[hidden]{display:none!important}
 footer{margin-top:28px;color:var(--muted);font-size:12px;line-height:1.6}
 @media(max-width:560px){.hide-sm{display:none}}
 </style>
 </head>
 <body>
-<div class="wrap">
+<div class="lock" id="lock" hidden>
+  <form id="lock-form" autocomplete="on">
+    <h1>Memebot</h1>
+    <div class="sub">Enter the dashboard password.</div>
+    <input type="text" name="username" value="memebot" autocomplete="username" hidden>
+    <input type="password" id="pw" autocomplete="current-password" placeholder="Password" required autofocus>
+    <label class="rem"><input type="checkbox" id="remember" checked> Remember on this device</label>
+    <button type="submit" id="unlock">Unlock</button>
+    <div class="err" id="err"></div>
+  </form>
+</div>
+<div class="wrap" id="app" hidden>
   <header>
     <div>
       <h1>Memebot</h1>
@@ -229,8 +267,10 @@ footer{margin-top:28px;color:var(--muted);font-size:12px;line-height:1.6}
 </div>
 
 <script>
-const D = __DATA__;
 const $ = id => document.getElementById(id);
+const P = __PAYLOAD__;
+function render(D) {
+$("app").hidden = false; $("lock").hidden = true;
 const usd = (v, sign) => v == null ? "—" : (sign && v > 0 ? "+" : v < 0 ? "−" : "") + "$" + Math.abs(v).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
 const pct = v => v == null ? "—" : (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v).toFixed(1) + "%";
 const cls = v => v > 0 ? "pos" : v < 0 ? "neg" : "flat";
@@ -384,8 +424,47 @@ $("signals").innerHTML = D.signals.length ? `<thead><tr><th>Coin</th><th class="
 $("rules").innerHTML = `Rules: $${D.rules.size} per trade, max ${D.rules.max_open} open · trailing stop ${D.rules.trail}% from peak · hard stop −${D.rules.stop}% · sell when smart money net flow over ${D.rules.sm_window} is below ${usd(D.rules.sm_exit)}.<br>` +
   `Prices refresh every run (about every 30 min). ${S.next_nansen ? "Next Nansen scan " + (S.next_nansen*1000 < Date.now() ? "on the next run" : "around " + when(S.next_nansen)) + "." : ""} ${D.mode === "paper" ? "Paper trades: fills include an assumed 4% round-trip slippage and fees." : ""}`;
 
+if (!P.plain) { $("rules").insertAdjacentHTML("beforeend", '<br><a href="#" id="lockbtn" style="color:var(--text-2)">Lock on this device</a>');
+  $("lockbtn").addEventListener("click", e => { e.preventDefault(); store.del(); location.reload(); }); }
 drawEquity(); drawPnl();
 let rt; addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(() => { drawEquity(); drawPnl(); }, 150); });
+}
+
+// ---------- password unlock ----------
+const KEY = "memebot.pw";
+const store = { get(){ try { return localStorage.getItem(KEY); } catch(e) { return null; } },
+                set(v){ try { localStorage.setItem(KEY, v); } catch(e) {} },
+                del(){ try { localStorage.removeItem(KEY); } catch(e) {} } };
+const unb64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+async function decrypt(pw){
+  const e = P.enc, enc = new TextEncoder();
+  const base = await crypto.subtle.importKey("raw", enc.encode(pw), "PBKDF2", false, ["deriveKey"]);
+  const key = await crypto.subtle.deriveKey({name:"PBKDF2", salt:unb64(e.salt), iterations:e.iter, hash:"SHA-256"},
+    base, {name:"AES-GCM", length:256}, false, ["decrypt"]);
+  const pt = await crypto.subtle.decrypt({name:"AES-GCM", iv:unb64(e.iv)}, key, unb64(e.ct));
+  return JSON.parse(new TextDecoder().decode(pt));
+}
+async function tryUnlock(pw, remember){
+  const D = await decrypt(pw);           // throws on a wrong password
+  if (remember) store.set(pw); else store.del();
+  render(D);
+}
+if (P.plain) render(P.plain);
+else {
+  const saved = store.get();
+  (saved ? tryUnlock(saved, true) : Promise.reject()).catch(() => {
+    store.del();
+    $("lock").hidden = false;
+    $("pw").focus();
+  });
+  $("lock-form").addEventListener("submit", async ev => {
+    ev.preventDefault();
+    const btn = $("unlock"); btn.disabled = true; btn.textContent = "Unlocking…"; $("err").textContent = "";
+    try { await tryUnlock($("pw").value, $("remember").checked); }
+    catch (e) { $("err").textContent = "Wrong password."; $("pw").select(); }
+    btn.disabled = false; btn.textContent = "Unlock";
+  });
+}
 </script>
 </body>
 </html>
