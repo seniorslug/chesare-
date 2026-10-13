@@ -29,6 +29,13 @@ CREATE TABLE IF NOT EXISTS trades (
   id INTEGER PRIMARY KEY, token TEXT, symbol TEXT, side TEXT, price REAL,
   usd REAL, pnl_usd REAL, reason TEXT, ts REAL, mode TEXT);
 CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT);
+CREATE TABLE IF NOT EXISTS scans (
+  ts REAL, token TEXT, nf1h REAL, nf24h REAL, nf7d REAL, traders INTEGER);
+CREATE INDEX IF NOT EXISTS scans_token ON scans(token, ts);
+CREATE TABLE IF NOT EXISTS lab (
+  id INTEGER PRIMARY KEY, ts REAL, token TEXT, symbol TEXT, score REAL,
+  qualified INTEGER, bought INTEGER, price0 REAL, features TEXT,
+  r4h REAL, r24h REAL, r72h REAL, max72 REAL, min72 REAL, done INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS signals (
   id INTEGER PRIMARY KEY, ts REAL, token TEXT, symbol TEXT, taken INTEGER, detail TEXT);
 """
@@ -88,6 +95,50 @@ class Store:
         hist = self.get("equity_history", [])
         hist.append([time.time(), round(equity, 2)])
         self.set("equity_history", hist[-keep:])
+
+    # scan memory (for persistence across scans)
+    def record_scan(self, rows: list[dict], ts: float) -> None:
+        self.db.executemany("INSERT INTO scans VALUES (?,?,?,?,?,?)", [
+            (ts, r.get("token_address"), r.get("net_flow_1h_usd"), r.get("net_flow_24h_usd"),
+             r.get("net_flow_7d_usd"), r.get("trader_count")) for r in rows])
+        self.db.execute("DELETE FROM scans WHERE ts < ?", (ts - 7 * 86400,))
+        self.db.commit()
+
+    def streaks(self, before: float, window_h: float = 30) -> dict[str, int]:
+        """How many earlier scans (in the window) saw each token with net smart money buying."""
+        rows = self.db.execute(
+            "SELECT token, COUNT(DISTINCT ts) FROM scans WHERE ts < ? AND ts >= ? AND nf24h > 0 GROUP BY token",
+            (before, before - window_h * 3600))
+        return {t: n for t, n in rows}
+
+    # signal lab
+    def lab_add(self, c, bought: bool) -> None:
+        self.db.execute(
+            "INSERT INTO lab (ts, token, symbol, score, qualified, bought, price0, features, max72, min72) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (time.time(), c.token, c.symbol, c.score, int(c.qualified), int(bought),
+             c.quote.price_usd, json.dumps(c.detail), 0.0, 0.0))
+        self.db.commit()
+
+    def lab_open(self) -> list[dict]:
+        cols = ["id", "ts", "token", "price0", "r4h", "r24h", "r72h", "max72", "min72"]
+        rows = self.db.execute(f"SELECT {','.join(cols)} FROM lab WHERE done = 0")
+        return [dict(zip(cols, r)) for r in rows]
+
+    def lab_update(self, row: dict) -> None:
+        self.db.execute("UPDATE lab SET r4h=?, r24h=?, r72h=?, max72=?, min72=?, done=? WHERE id=?",
+                        (row["r4h"], row["r24h"], row["r72h"], row["max72"], row["min72"],
+                         int(row.get("done", 0)), row["id"]))
+        self.db.commit()
+
+    def lab_all(self, limit: int = 2000) -> list[dict]:
+        cols = ["ts", "token", "symbol", "score", "qualified", "bought", "price0",
+                "features", "r4h", "r24h", "r72h", "max72", "min72", "done"]
+        rows = self.db.execute(f"SELECT {','.join(cols)} FROM lab ORDER BY ts DESC LIMIT ?", (limit,))
+        out = []
+        for r in rows:
+            d = dict(zip(cols, r)); d["features"] = json.loads(d["features"] or "{}"); out.append(d)
+        return out
 
     # key/value (paper cash balance, last scan time)
     def get(self, k: str, default=None):

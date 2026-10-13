@@ -11,6 +11,29 @@ from pathlib import Path
 from .store import Store
 
 
+BUCKETS = [("70+", 70, 101), ("55–70", 55, 70), ("40–55", 40, 55), ("< 40", -1, 40)]
+
+
+def lab_stats(rows: list[dict], min_score: float) -> dict:
+    def summarize(sub):
+        d24 = [r["r24h"] for r in sub if r["r24h"] is not None]
+        d72 = [r["r72h"] for r in sub if r["r72h"] is not None]
+        mx = [r["max72"] for r in sub if r["r24h"] is not None]
+        mn = [r["min72"] for r in sub if r["r24h"] is not None]
+        avg = lambda xs: sum(xs) / len(xs) if xs else None
+        return {"n": len(sub), "n24": len(d24), "avg24": avg(d24),
+                "up24": (sum(1 for x in d24 if x > 0) / len(d24) * 100) if d24 else None,
+                "n72": len(d72), "avg72": avg(d72), "best": avg(mx), "worst": avg(mn)}
+    buckets = [{"label": lab, **summarize([r for r in rows if lo <= r["score"] < hi])}
+               for lab, lo, hi in BUCKETS]
+    recent = [{"ts": r["ts"], "token": r["token"], "symbol": r["symbol"], "score": r["score"],
+               "bought": bool(r["bought"]), "r4h": r["r4h"], "r24h": r["r24h"], "r72h": r["r72h"],
+               "parts": r["features"].get("parts", {})} for r in rows[:12]]
+    return {"buckets": buckets, "recent": recent, "total": len(rows), "min_score": min_score,
+            "qualified": summarize([r for r in rows if r["score"] >= min_score]),
+            "below": summarize([r for r in rows if r["score"] < min_score])}
+
+
 def collect(store: Store, cfg) -> dict:
     start = cfg["mode"]["paper_starting_balance_usd"]
     cash = store.get("cash", start)
@@ -82,6 +105,7 @@ def collect(store: Store, cfg) -> dict:
         "closed": list(reversed(closed)),
         "equity": store.get("equity_history", []),
         "signals": store.signals(30),
+        "lab": lab_stats(store.lab_all(), cfg["entry"].get("min_entry_score", 0)),
     }
 
 
@@ -190,6 +214,10 @@ td.n,th.n{text-align:right}
 .tbl{overflow-x:auto;-webkit-overflow-scrolling:touch}
 .reason{color:var(--muted);font-size:12px;margin-top:2px;max-width:340px}
 .tag{display:inline-block;font-size:11px;padding:1px 7px;border-radius:999px;border:1px solid var(--border);color:var(--text-2)}
+.verdict{font-size:13px;padding:10px 12px;border-radius:10px;background:var(--surface-2);margin-bottom:10px;color:var(--text-2)}
+.verdict b{color:var(--text)}
+.score{display:inline-block;min-width:30px;text-align:center;font-weight:600;font-size:12px;padding:2px 6px;border-radius:6px;background:var(--surface-2);color:var(--text)}
+.score.hi{background:var(--series);color:#fff}
 .legend{display:flex;gap:14px;font-size:12px;color:var(--text-2);margin-top:6px}
 .legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
 .lock{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px 16px}
@@ -256,6 +284,15 @@ footer{margin-top:28px;color:var(--muted);font-size:12px;line-height:1.6}
   <section class="card">
     <h2>Closed trades <small id="closed-count"></small></h2>
     <div class="tbl"><table id="closed"></table></div>
+  </section>
+
+  <section class="card">
+    <h2>Signal lab <small id="lab-sub"></small></h2>
+    <div class="sub" style="margin:-4px 0 10px">Every coin that passes the filters is followed for 3 days, bought or not. This shows whether higher entry scores really lead to better returns.</div>
+    <div id="lab-verdict"></div>
+    <div class="tbl"><table id="lab"></table></div>
+    <h2 style="margin-top:16px">Recently scored</h2>
+    <div class="tbl"><table id="lab-recent"></table></div>
   </section>
 
   <section class="card">
@@ -414,11 +451,34 @@ $("closed").innerHTML = D.closed.length ? `<thead><tr><th>Coin</th><th class="n"
     <td class="n">${held(c.opened, c.closed)}</td></tr>`).join("") + "</tbody>"
   : '<tbody><tr><td class="empty">No closed trades yet.</td></tr></tbody>';
 
+// ---------- signal lab ----------
+const L = D.lab;
+$("lab-sub").textContent = `${L.total} coins tracked`;
+const pctOr = v => v == null ? '<span class="flat">—</span>' : `<span class="${cls(v)}">${pct(v)}</span>`;
+const scoreTag = v => `<span class="score ${v >= L.min_score ? "hi" : ""}">${Math.round(v)}</span>`;
+(() => {
+  const q = L.qualified, b = L.below;
+  let msg;
+  if (q.n24 < 10 || b.n24 < 10) msg = `<b>Still collecting data.</b> ${q.n24 + b.n24} coins have a 24h result so far. Give it about 30 per side (above and below the buy threshold of ${L.min_score}) before trusting the comparison.`;
+  else if (q.avg24 > b.avg24) msg = `<b>Score is working:</b> coins scoring ${L.min_score}+ averaged ${pct(q.avg24)} after 24h vs ${pct(b.avg24)} for lower scores (${q.n24} vs ${b.n24} coins).`;
+  else msg = `<b>Score isn't separating yet:</b> ${L.min_score}+ coins averaged ${pct(q.avg24)} after 24h vs ${pct(b.avg24)} for lower scores. The weights may need changing.`;
+  $("lab-verdict").innerHTML = `<div class="verdict">${msg}</div>`;
+})();
+$("lab").innerHTML = `<thead><tr><th>Score</th><th class="n">Coins</th><th class="n">Avg 24h</th><th class="n">Up after 24h</th><th class="n hide-sm">Avg 72h</th><th class="n hide-sm">Best / worst</th></tr></thead><tbody>` +
+  L.buckets.map(k => `<tr><td>${k.label}</td><td class="n">${k.n}${k.n24 < k.n ? `<div class="reason">${k.n24} with 24h</div>` : ""}</td>
+    <td class="n mono">${pctOr(k.avg24)}</td><td class="n mono">${k.up24 == null ? "—" : Math.round(k.up24) + "%"}</td>
+    <td class="n mono hide-sm">${pctOr(k.avg72)}</td><td class="n mono hide-sm">${pctOr(k.best)} / ${pctOr(k.worst)}</td></tr>`).join("") + "</tbody>";
+$("lab-recent").innerHTML = L.recent.length ? `<thead><tr><th>Coin</th><th class="n">Score</th><th class="n">4h</th><th class="n">24h</th><th class="n hide-sm">72h</th></tr></thead><tbody>` +
+  L.recent.map(r => `<tr><td><a href="${dex(r.token)}" target="_blank" rel="noopener" style="color:inherit">${esc(r.symbol)}</a> ${r.bought ? '<span class="tag">bought</span>' : ""}<div class="reason">${ago(r.ts)}</div></td>
+    <td class="n" title="${esc(Object.entries(r.parts).map(([k,v]) => k + " " + v).join(", "))}">${scoreTag(r.score)}</td>
+    <td class="n mono">${pctOr(r.r4h)}</td><td class="n mono">${pctOr(r.r24h)}</td><td class="n mono hide-sm">${pctOr(r.r72h)}</td></tr>`).join("") + "</tbody>"
+  : '<tbody><tr><td class="empty">Nothing scored yet. The next Nansen scan fills this in.</td></tr></tbody>';
+
 // ---------- signals ----------
-$("signals").innerHTML = D.signals.length ? `<thead><tr><th>Coin</th><th class="n">SM net 24h</th><th class="n">Price 24h</th><th class="n hide-sm">Wallets</th><th>When</th></tr></thead><tbody>` +
+$("signals").innerHTML = D.signals.length ? `<thead><tr><th>Coin</th><th class="n">SM net 24h</th><th class="n">Price 24h</th><th class="n">Score</th><th class="n hide-sm">Wallets</th><th>When</th></tr></thead><tbody>` +
   D.signals.map(s => { const d = s.detail || {}; return `<tr><td><a href="${dex(s.token)}" target="_blank" rel="noopener" style="color:inherit">${esc(s.symbol)}</a> ${s.taken ? '<span class="tag">bought</span>' : '<span class="tag">skipped</span>'}</td>
     <td class="n mono">${d.sm_netflow_24h != null ? usd(d.sm_netflow_24h, true) : "—"}</td>
-    <td class="n mono ${cls(d.price_24h)}">${pct(d.price_24h)}</td><td class="n hide-sm">${d.sm_traders ?? "—"}</td><td>${ago(s.ts)}</td></tr>`; }).join("") + "</tbody>"
+    <td class="n mono ${cls(d.price_24h)}">${pct(d.price_24h)}</td><td class="n">${d.score != null ? scoreTag(d.score) : "—"}</td><td class="n hide-sm">${d.sm_traders ?? "—"}</td><td>${ago(s.ts)}</td></tr>`; }).join("") + "</tbody>"
   : '<tbody><tr><td class="empty">No signals yet.</td></tr></tbody>';
 
 $("rules").innerHTML = `Rules: $${D.rules.size} per trade, max ${D.rules.max_open} open · trailing stop ${D.rules.trail}% from peak · hard stop −${D.rules.stop}% · sell when smart money net flow over ${D.rules.sm_window} is below ${usd(D.rules.sm_exit)}.<br>` +

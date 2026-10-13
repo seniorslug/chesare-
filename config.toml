@@ -37,12 +37,22 @@ min_sm_trader_count = 3
 # Price side: price falling while they buy (the divergence)
 max_price_change_24h_pct = -15.0   # price must be down at least 15% over 24h
 max_price_change_6h_pct = 0.0      # and not already bouncing over 6h
+min_price_change_24h_pct = -80.0   # but a >80% collapse looks like a rug: skip
+min_liquidity_to_mcap = 0.02       # pool must be at least 2% of market cap
+# Entry score 0-100 (breadth, intensity, persistence, buying now, divergence,
+# stabilizing, liquidity). Only buy at or above this. See bot/strategy.py.
+min_entry_score = 55
 # Optional extra check per coin with Nansen flow intelligence. Off by default:
 # each check is one more call, and it only runs if max_calls_per_run leaves room.
 confirm_with_flow_intelligence = false
 confirm_timeframe = "1d"        # 5m, 1h, 6h, 12h, 1d, 7d
 min_confirm_netflow_usd = 5000
 min_confirm_wallets = 3
+
+[lab]
+# Signal lab: follow every coin that passes the hard filters (bought or not)
+# and record its return 4h / 24h / 72h later. Free (DexScreener prices).
+track_per_scan = 15
 
 [risk]
 position_size_usd = 50.0

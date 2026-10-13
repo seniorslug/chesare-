@@ -200,5 +200,101 @@ class NansenScheduleTest(unittest.TestCase):
             self.assertNotIn("__DATA__", html)
 
 
+class ScoringTests(unittest.TestCase):
+    def setUp(self):
+        self.cfg = load_settings()
+
+    def _row(self, **kw):
+        r = {"token_address": GOOD, "token_symbol": "GOOD", "net_flow_24h_usd": 60_000,
+             "trader_count": 6, "token_age_days": 10, "market_cap_usd": 2e6}
+        r.update(kw)
+        return r
+
+    def test_more_wallets_persistence_and_buying_now_score_higher(self):
+        base, _ = strategy.entry_score(self._row(), q(GOOD), streak=0)
+        better, f = strategy.entry_score(
+            self._row(trader_count=20, net_flow_1h_usd=2_000, net_flow_7d_usd=150_000), q(GOOD), streak=2)
+        self.assertGreater(better, base + 25)
+        self.assertEqual(f["parts"]["persistence"], 20)
+        self.assertEqual(f["parts"]["buying_now"], 10)
+
+    def test_still_dumping_and_smart_money_selling_now_score_lower(self):
+        calm, _ = strategy.entry_score(self._row(net_flow_1h_usd=500), q(GOOD), 1)
+        knife, _ = strategy.entry_score(self._row(net_flow_1h_usd=-3_000), q(GOOD, h6=-15), 1)
+        k2 = q(GOOD); k2.change_1h = -12
+        knife2, _ = strategy.entry_score(self._row(net_flow_1h_usd=-3_000), k2, 1)
+        self.assertGreater(calm, knife)
+        self.assertGreater(knife, knife2)
+
+    def test_rug_collapse_and_thin_pool_filtered(self):
+        rows = [self._row(), self._row(token_address=THIN, token_symbol="THIN")]
+        quotes = {GOOD: q(GOOD, h24=-90), THIN: q(THIN, liq=30_000, mcap=5e6)}
+        passed, rejected = strategy.screen(rows, quotes, self.cfg)
+        self.assertEqual(passed, [])
+        why = " ".join(w for r in rejected for w in r["why"])
+        self.assertIn("rug", why)
+        self.assertIn("thin pool", why)
+
+    def test_below_min_score_is_scored_but_not_qualified(self):
+        weak = self._row(trader_count=3, net_flow_24h_usd=10_500, market_cap_usd=4e7)
+        passed, _ = strategy.screen([weak], {GOOD: q(GOOD, mcap=4e7, liq=3e6, h24=-16)}, self.cfg)
+        self.assertEqual(len(passed), 1)
+        self.assertFalse(passed[0].qualified)
+        self.assertLess(passed[0].score, self.cfg["entry"]["min_entry_score"])
+
+
+class MemoryAndLabTests(unittest.TestCase):
+    def test_streaks_and_lab_returns(self):
+        cfg = load_settings()
+        cfg.nansen_api_key = "test"
+        cfg.data_dir = Path(tempfile.mkdtemp())
+        prices = {"p": 1.0}
+
+        def fake_post(self, path, body, retries=3):
+            self.calls += 1
+            if body["filters"].get("token_address"):
+                return {"data": []}
+            return {"data": NETFLOWS}
+
+        def quotes(ts):
+            base = dict(QUOTES); base[GOOD] = q(GOOD, price=prices["p"])
+            return {t: base[t] for t in ts if t in base}
+
+        with mock.patch.object(nansen_mod.Nansen, "_post", fake_post), \
+             mock.patch.object(runner, "get_quotes", side_effect=quotes):
+            bot = runner.Bot(cfg)
+            bot.notify = lambda m: None
+            s = bot.store
+            # Two earlier scans saw GOOD accumulating
+            s.record_scan(NETFLOWS, time.time() - 8 * 3600)
+            s.record_scan(NETFLOWS, time.time() - 4 * 3600)
+            self.assertEqual(s.streaks(time.time())[GOOD], 2)
+
+            bot.run_once(force_nansen=True)
+            lab = s.lab_all()
+            self.assertEqual([r["token"] for r in lab], [GOOD])
+            self.assertTrue(lab[0]["bought"])
+            self.assertEqual(lab[0]["features"]["streak"], 2)
+            pos = s.positions()[0]
+            self.assertIn("seen in 2 earlier scans", pos.entry_reason)
+
+            # 25h later price is up 30%: 4h and 24h returns get filled, 72h still open
+            s.db.execute("UPDATE lab SET ts = ts - 25*3600")
+            prices["p"] = 1.3
+            bot.update_lab()
+            r = s.lab_all()[0]
+            self.assertAlmostEqual(r["r24h"], 30.0, places=3)
+            self.assertAlmostEqual(r["r4h"], 30.0, places=3)
+            self.assertIsNone(r["r72h"])
+            self.assertAlmostEqual(r["max72"], 30.0, places=3)
+
+            s.db.execute("UPDATE lab SET ts = ts - 48*3600")
+            prices["p"] = 0.9
+            bot.update_lab()
+            r = s.lab_all()[0]
+            self.assertAlmostEqual(r["r72h"], -10.0, places=3)
+            self.assertEqual(r["done"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

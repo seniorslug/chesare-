@@ -9,7 +9,16 @@ Buys young memecoins (≤30 days old) that Nansen smart money is **accumulating 
 2. DexScreener: price down ≥ 15% over 24h and not already up over 6h; ≥ $75k liquidity; pool also ≤ 30 days old
 3. Optional (off by default): a per-coin Nansen flow intelligence check, if the call cap leaves room
 
-Candidates are ranked by a divergence score: (smart money buying ÷ market cap) × size of the price drop.
+Coins that pass get an **entry score from 0 to 100**, and the bot only buys at 55 or above:
+- Breadth (20): how many distinct smart wallets are buying
+- Intensity (20): net buying as a % of market cap
+- Persistence (20): also accumulating in earlier scans and over the past week
+- Buying now (10): smart money still net buying in the last hour
+- Divergence (15): a real price drop, but not a rug-like collapse
+- Stabilizing (10): price no longer falling hard in the last hour
+- Liquidity (5): pool depth relative to market cap
+
+**Signal lab:** every scored coin is followed for 3 days (bought or not), and the dashboard compares returns by score. Once there are ~30 coins on each side of the threshold, that shows whether the score works and which way to adjust it. Uses free price data only.
 
 **Exit** (prices checked every 2 min), first hit wins:
 - Hard stop: −35% from entry (in live mode also placed on GMGN, so it fires even if the bot is down)
