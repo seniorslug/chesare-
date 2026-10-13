@@ -1,0 +1,44 @@
+name: memebot
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"   # every 30 min (GitHub may delay scheduled runs at busy times)
+  workflow_dispatch:          # "Run workflow" button for manual runs
+
+permissions:
+  contents: write             # lets the job save the trade database back to the repo
+
+concurrency:
+  group: memebot
+  cancel-in-progress: false   # never run two passes at once
+
+jobs:
+  trade:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: One manage + scan pass (paper mode)
+        env:
+          NANSEN_API_KEY: ${{ secrets.NANSEN_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          LIVE_TRADING_CONFIRM: "no"   # live trading can't run here: GMGN needs a fixed whitelisted IP
+        run: python main.py once
+
+      - name: Save positions and trade history
+        if: always()
+        run: |
+          git config user.name "memebot"
+          git config user.email "memebot@users.noreply.github.com"
+          git add data/memebot.db data/memebot.log || true
+          git diff --cached --quiet || git commit -m "memebot state $(date -u +%F' '%H:%M)"
+          git push

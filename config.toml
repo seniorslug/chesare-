@@ -1,0 +1,59 @@
+# Memecoin smart-money divergence bot — settings
+# Edit these, then restart the bot. API keys go in .env, not here.
+
+[mode]
+# "paper" = simulated trades only. "live" = real swaps through GMGN.
+# Live also requires LIVE_TRADING_CONFIRM=yes in .env as a second lock.
+trading_mode = "paper"
+paper_starting_balance_usd = 1000.0
+
+[timing]
+scan_interval_min = 15          # how often to look for new entries (each scan costs Nansen credits)
+manage_interval_min = 2         # how often to check open positions' prices (free)
+smart_money_exit_check_min = 15 # how often to check Nansen flows on open positions
+
+[universe]
+max_token_age_days = 30
+min_market_cap_usd = 300000
+max_market_cap_usd = 50000000
+min_liquidity_usd = 75000
+# Nansen smart money labels to count. Options: Fund, Smart Trader,
+# 30D Smart Trader, 90D Smart Trader, 180D Smart Trader
+smart_money_labels = ["Fund", "Smart Trader", "30D Smart Trader", "90D Smart Trader"]
+
+[entry]
+# Smart money side: net buying over the window
+min_sm_netflow_24h_usd = 10000
+min_sm_trader_count = 3
+# Confirmation via Nansen flow intelligence on the token
+confirm_timeframe = "1d"        # 5m, 1h, 6h, 12h, 1d, 7d
+min_confirm_netflow_usd = 5000
+min_confirm_wallets = 3
+# Price side: price falling while they buy (the divergence)
+max_price_change_24h_pct = -15.0   # price must be down at least 15% over 24h
+max_price_change_6h_pct = 0.0      # and not already bouncing over 6h
+# Only send the top N candidates to the (credit-costing) confirmation step
+max_candidates_to_confirm = 8
+
+[risk]
+position_size_usd = 50.0
+max_open_positions = 5
+max_daily_loss_usd = 150.0       # stop opening new trades for the day after this
+reentry_cooldown_hours = 24
+assumed_slippage_pct = 3.0       # paper mode: haircut on each fill
+assumed_fee_pct = 1.0            # paper mode: GMGN/priority fees
+
+[exit]
+trailing_stop_pct = 25.0         # sell when price falls this far from its peak since entry
+trailing_activation_pct = 0.0    # trail only after this gain (0 = trail from entry)
+hard_stop_loss_pct = 35.0        # safety floor; in live mode also placed as a GMGN stop order
+# Follow smart money out
+exit_on_sm_outflow = true
+sm_exit_timeframe = "6h"
+sm_exit_netflow_usd = -5000      # sell if smart money net flow over the timeframe is below this
+max_hold_days = 14
+
+[gmgn]
+chain = "sol"                    # GMGN's chain name for Solana; check `gmgn-cli swap --help`
+slippage_pct = 15
+anti_mev = true
