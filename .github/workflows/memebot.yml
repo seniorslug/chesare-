@@ -7,6 +7,8 @@ on:
 
 permissions:
   contents: write             # lets the job save the trade database back to the repo
+  pages: write                # publish the dashboard
+  id-token: write
 
 concurrency:
   group: memebot
@@ -42,3 +44,27 @@ jobs:
           git add data/memebot.db data/memebot.log || true
           git diff --cached --quiet || git commit -m "memebot state $(date -u +%F' '%H:%M)"
           git push
+
+      - name: Build dashboard page
+        if: always()
+        run: python main.py dashboard
+
+      - uses: actions/upload-pages-artifact@v3
+        if: always()
+        with:
+          path: site
+
+  dashboard:
+    # Publishes site/index.html to GitHub Pages. Needs Pages turned on
+    # (Settings -> Pages -> Source: GitHub Actions). Until then this job
+    # fails on its own without affecting trading.
+    needs: trade
+    if: always()
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4

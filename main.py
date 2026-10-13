@@ -4,6 +4,7 @@
   python main.py once      one manage + scan pass, then exit (good for cron)
   python main.py run       run continuously
   python main.py report    paper/live P&L, win rate, open positions
+  python main.py dashboard build the trade dashboard web page into site/index.html
 """
 from __future__ import annotations
 
@@ -84,6 +85,10 @@ def main() -> None:
         doctor(cfg)
     elif cmd == "report":
         report(cfg)
+    elif cmd == "dashboard":
+        from bot.dashboard import build
+        from bot.store import Store
+        print(build(Store(cfg.data_dir / "memebot.db"), cfg, cfg.data_dir.parent / "site"))
     elif cmd in ("once", "run"):
         from bot.runner import Bot
         bot = Bot(cfg)

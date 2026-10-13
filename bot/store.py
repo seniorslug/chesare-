@@ -20,6 +20,7 @@ class Position:
     entry_reason: str = ""
     gmgn_stop_id: str = ""
     last_sm_check: float = 0.0
+    last_price: float = 0.0
 
 
 SCHEMA = """
@@ -76,6 +77,17 @@ class Store:
         self.db.execute("INSERT INTO signals (ts, token, symbol, taken, detail) VALUES (?,?,?,?,?)",
                         (time.time(), token, symbol, int(taken), json.dumps(detail)))
         self.db.commit()
+
+    def signals(self, limit: int = 50) -> list[dict]:
+        rows = self.db.execute(
+            "SELECT ts, token, symbol, taken, detail FROM signals ORDER BY ts DESC LIMIT ?", (limit,))
+        return [{"ts": r[0], "token": r[1], "symbol": r[2], "taken": bool(r[3]),
+                 "detail": json.loads(r[4] or "{}")} for r in rows]
+
+    def add_equity_point(self, equity: float, keep: int = 3000) -> None:
+        hist = self.get("equity_history", [])
+        hist.append([time.time(), round(equity, 2)])
+        self.set("equity_history", hist[-keep:])
 
     # key/value (paper cash balance, last scan time)
     def get(self, k: str, default=None):

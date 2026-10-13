@@ -194,6 +194,11 @@ class NansenScheduleTest(unittest.TestCase):
             bot.run_once()          # 4h later: Nansen again (2 calls, position open)
             self.assertEqual(len(calls), 3)
 
+            from bot.dashboard import build
+            html = build(bot.store, cfg, cfg.data_dir / "site").read_text()
+            self.assertIn('"symbol": "GOOD"', html)
+            self.assertNotIn("__DATA__", html)
+
 
 if __name__ == "__main__":
     unittest.main()

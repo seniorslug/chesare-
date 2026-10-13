@@ -157,6 +157,7 @@ class Bot:
                 log.warning("No price for %s this round", p.symbol)
                 continue
             strategy.update_peak(p, q.price_usd)
+            p.last_price = q.price_usd
             if p.token in sm:
                 p.last_sm_check = now
             why = strategy.exit_reason(p, q.price_usd, now, self.cfg, sm.get(p.token))
@@ -188,7 +189,18 @@ class Bot:
         self.notify(f"{emoji} [{self.mode.upper()}] SELL {p.symbol} {pnl:+.2f} USD ({(fill / p.entry_price - 1) * 100:+.1f}%)\n{why}")
 
     # ---------- loop ----------
+    def equity(self) -> float:
+        held = sum(p.qty * (p.last_price or p.entry_price) for p in self.store.positions())
+        return self.store.get("cash", 0.0) + held
+
     def run_once(self, force_nansen: bool = False) -> None:
+        try:
+            self._run_once(force_nansen)
+        finally:
+            if self.mode == "paper":
+                self.store.add_equity_point(self.equity())
+
+    def _run_once(self, force_nansen: bool = False) -> None:
         every = self.cfg["nansen"].get("nansen_every_hours", 0) * 3600
         last = self.store.get("last_nansen_run", 0)
         if not force_nansen and time.time() - last < every:
