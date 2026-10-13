@@ -4,17 +4,17 @@ Buys young memecoins (≤30 days old) that Nansen smart money is **accumulating 
 
 ## How it decides
 
-**Entry** (every 15 min), all must be true:
+**Entry** (each run), all must be true:
 1. Nansen smart money netflow: token ≤ 30 days old, $300k–$50M market cap, ≥ $10k net smart money buying over 24h from ≥ 3 smart wallets
 2. DexScreener: price down ≥ 15% over 24h and not already up over 6h; ≥ $75k liquidity; pool also ≤ 30 days old
-3. Nansen flow intelligence on that token confirms smart traders are net buyers (≥ $5k from ≥ 3 wallets over 1d)
+3. Optional (off by default): a per-coin Nansen flow intelligence check, if the call cap leaves room
 
 Candidates are ranked by a divergence score: (smart money buying ÷ market cap) × size of the price drop.
 
 **Exit** (prices checked every 2 min), first hit wins:
 - Hard stop: −35% from entry (in live mode also placed on GMGN, so it fires even if the bot is down)
 - Trailing stop: 25% below the highest price since entry
-- Smart money exits: smart trader net flow over 6h below −$5k
+- Smart money exits: smart money net flow over 24h below −$5k
 - Max hold: 14 days
 
 Risk limits: $50 per trade, max 5 open, stops new entries after −$150 in a day, 24h cooldown before re-buying a coin.
@@ -57,7 +57,7 @@ Create a Telegram bot with @BotFather, put the token and your chat ID in `.env`.
 
 ## Nansen credits
 
-Each scan makes 1 netflow call plus up to 8 flow-intelligence calls; each open position adds 1 call every 15 min. Run `doctor` once and look at the credits it reports, then raise `scan_interval_min` if you're burning too fast. Nansen's API needs a plan with API access.
+Hard cap: **2 Nansen calls per run** (`max_calls_per_run` in config.toml). One call checks smart money on all open positions together; one scans for new coins. With nothing open, a run uses 1. Price checks use DexScreener and cost nothing. The run log prints how many calls and credits each run used.
 
 ## Going live (only after paper results earn it)
 

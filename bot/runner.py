@@ -19,7 +19,7 @@ class Bot:
     def __init__(self, cfg):
         self.cfg = cfg
         self.store = Store(cfg.data_dir / "memebot.db")
-        self.nansen = Nansen(cfg.nansen_api_key)
+        self.nansen = Nansen(cfg.nansen_api_key, cfg["nansen"]["max_calls_per_run"])
         self.mode = "live" if cfg.is_live else "paper"
         self.gmgn = None
         if self.mode == "live":
@@ -55,6 +55,9 @@ class Bot:
             log.info("Scan skipped: daily loss limit hit")
             return
 
+        if self.nansen.calls_left < 1:
+            log.info("Scan skipped: Nansen call cap for this run already used")
+            return
         u = cfg["universe"]
         rows = self.nansen.smart_money_netflows(
             "solana", u["max_token_age_days"], u["min_market_cap_usd"], u["max_market_cap_usd"],
@@ -68,24 +71,28 @@ class Bot:
 
         now = time.time()
         cooldown = r["reentry_cooldown_hours"] * 3600
-        checked = 0
+        confirm = cfg["entry"]["confirm_with_flow_intelligence"]
         for c in candidates:
-            if len(open_pos) >= r["max_open_positions"] or checked >= cfg["entry"]["max_candidates_to_confirm"]:
+            if len(open_pos) >= r["max_open_positions"]:
                 break
             if c.token in open_pos or now - self.store.last_exit(c.token) < cooldown:
                 continue
-            checked += 1
-            try:
-                flow = self.nansen.flow_intelligence("solana", c.token, cfg["entry"]["confirm_timeframe"])
-            except NansenError as e:
-                log.warning("Confirm failed for %s: %s", c.symbol, e)
-                continue
-            ok, note = strategy.confirmed(flow, cfg)
-            c.detail["confirm"] = note
-            self.store.log_signal(c.token, c.symbol, ok, c.detail)
-            if not ok:
-                log.info("  %s rejected at confirmation (%s)", c.symbol, note)
-                continue
+            if confirm:
+                if self.nansen.calls_left < 1:
+                    log.info("  %s not confirmed: no Nansen calls left this run", c.symbol)
+                    break
+                try:
+                    flow = self.nansen.flow_intelligence("solana", c.token, cfg["entry"]["confirm_timeframe"])
+                except NansenError as e:
+                    log.warning("Confirm failed for %s: %s", c.symbol, e)
+                    continue
+                ok, note = strategy.confirmed(flow, cfg)
+                c.detail["confirm"] = note
+                if not ok:
+                    self.store.log_signal(c.token, c.symbol, False, c.detail)
+                    log.info("  %s rejected at confirmation (%s)", c.symbol, note)
+                    continue
+            self.store.log_signal(c.token, c.symbol, True, c.detail)
             if self.open_position(c):
                 open_pos.add(c.token)
 
@@ -123,28 +130,36 @@ class Bot:
         return True
 
     # ---------- exits ----------
-    def manage(self) -> None:
+    def _sm_netflows(self, positions: list[Position]) -> dict[str, float]:
+        """One Nansen call covering every open position."""
+        x = self.cfg["exit"]
+        if not x["exit_on_sm_outflow"] or self.nansen.calls_left < 1:
+            return {}
+        try:
+            rows = self.nansen.netflows_for_tokens(
+                "solana", [p.token for p in positions], self.cfg["universe"]["smart_money_labels"])
+        except NansenError as e:
+            log.warning("Smart money exit check failed: %s", e)
+            return {}
+        field = f"net_flow_{x['sm_exit_window']}_usd"
+        return {t: float(r.get(field) or 0) for t, r in rows.items()}
+
+    def manage(self, check_smart_money: bool = True) -> None:
         positions = self.store.positions()
         if not positions:
             return
         quotes = get_quotes([p.token for p in positions])
+        sm = self._sm_netflows(positions) if check_smart_money else {}
         now = time.time()
-        check_sm = self.cfg["exit"]["exit_on_sm_outflow"]
-        sm_every = self.cfg["timing"]["smart_money_exit_check_min"] * 60
         for p in positions:
             q = quotes.get(p.token)
             if not q:
                 log.warning("No price for %s this round", p.symbol)
                 continue
             strategy.update_peak(p, q.price_usd)
-            sm_flow = None
-            if check_sm and now - p.last_sm_check >= sm_every:
-                try:
-                    sm_flow = self.nansen.flow_intelligence("solana", p.token, self.cfg["exit"]["sm_exit_timeframe"])
-                    p.last_sm_check = now
-                except NansenError as e:
-                    log.warning("SM exit check failed for %s: %s", p.symbol, e)
-            why = strategy.exit_reason(p, q.price_usd, now, self.cfg, sm_flow)
+            if p.token in sm:
+                p.last_sm_check = now
+            why = strategy.exit_reason(p, q.price_usd, now, self.cfg, sm.get(p.token))
             if why:
                 self.close_position(p, q.price_usd, why)
             else:
@@ -174,8 +189,11 @@ class Bot:
 
     # ---------- loop ----------
     def run_once(self) -> None:
+        self.nansen.new_run()
         self.manage()
         self.scan()
+        log.info("Nansen calls this run: %d (credits reported: %.0f)",
+                 self.nansen.calls, self.nansen.credits_used)
 
     def run_forever(self) -> None:
         t = self.cfg["timing"]
@@ -183,11 +201,11 @@ class Bot:
         last_scan = 0.0
         while True:
             try:
-                self.manage()
                 if time.time() - last_scan >= t["scan_interval_min"] * 60:
-                    self.scan()
+                    self.run_once()  # Nansen calls only happen here, capped per run
                     last_scan = time.time()
-                    log.info("Nansen credits used this session: %.0f", self.nansen.credits_used)
+                else:
+                    self.manage(check_smart_money=False)  # free price checks in between
             except KeyboardInterrupt:
                 raise
             except Exception:

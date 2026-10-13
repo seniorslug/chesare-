@@ -4,7 +4,7 @@ Entry = smart money accumulating a young coin while its price is falling:
   1. Nansen netflow: token <= max age, smart money net buying over 24h, enough distinct wallets
   2. DexScreener: price down hard over 24h and not already bouncing over 6h,
      enough liquidity, pool age also <= max age (double-check)
-  3. Nansen flow intelligence on the token confirms smart traders are net buyers
+  3. (optional, off by default) Nansen flow intelligence confirms smart traders are net buyers
 
 Exit (first one that triggers):
   - hard stop loss from entry
@@ -89,7 +89,7 @@ def update_peak(pos: Position, price: float) -> None:
         pos.peak_price = price
 
 
-def exit_reason(pos: Position, price: float, now: float, cfg, sm_flow: dict | None = None) -> str | None:
+def exit_reason(pos: Position, price: float, now: float, cfg, sm_netflow: float | None = None) -> str | None:
     """Return why to sell, or None to keep holding. Call update_peak first."""
     x = cfg["exit"]
     change = (price / pos.entry_price - 1) * 100
@@ -99,10 +99,8 @@ def exit_reason(pos: Position, price: float, now: float, cfg, sm_flow: dict | No
     drawdown = (1 - price / pos.peak_price) * 100
     if peak_gain >= x["trailing_activation_pct"] and drawdown >= x["trailing_stop_pct"]:
         return f"trailing stop: {drawdown:.1f}% off peak (peak {peak_gain:+.1f}%, now {change:+.1f}%)"
-    if x["exit_on_sm_outflow"] and sm_flow:
-        nf = float(sm_flow.get("smart_trader_net_flow_usd") or 0)
-        if nf <= x["sm_exit_netflow_usd"]:
-            return f"smart money exiting: net ${nf:,.0f} over {x['sm_exit_timeframe']} (now {change:+.1f}%)"
+    if x["exit_on_sm_outflow"] and sm_netflow is not None and sm_netflow <= x["sm_exit_netflow_usd"]:
+        return f"smart money exiting: net ${sm_netflow:,.0f} over {x['sm_exit_window']} (now {change:+.1f}%)"
     if (now - pos.opened_at) / 86400 >= x["max_hold_days"]:
         return f"max hold reached ({change:+.1f}%)"
     return None

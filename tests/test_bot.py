@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from bot import nansen as nansen_mod
 from bot import runner, strategy
 from bot.config import load_settings
 from bot.prices import Quote, parse_pairs
@@ -66,9 +67,10 @@ class StrategyTests(unittest.TestCase):
     def test_follow_smart_money_out(self):
         p = self._pos()
         strategy.update_peak(p, 1.1)
-        why = strategy.exit_reason(p, 1.1, time.time(), self.cfg, {"smart_trader_net_flow_usd": -12_000})
+        why = strategy.exit_reason(p, 1.1, time.time(), self.cfg, -12_000)
         self.assertIn("smart money exiting", why)
-        self.assertIsNone(strategy.exit_reason(p, 1.1, time.time(), self.cfg, {"smart_trader_net_flow_usd": 3_000}))
+        self.assertIsNone(strategy.exit_reason(p, 1.1, time.time(), self.cfg, 3_000))
+        self.assertIsNone(strategy.exit_reason(p, 1.1, time.time(), self.cfg, None))
 
     def test_max_hold(self):
         p = self._pos()
@@ -98,40 +100,71 @@ class PaperLoopTest(unittest.TestCase):
         cfg.nansen_api_key = "test"
         cfg.live_confirm = False
         cfg.data_dir = Path(tempfile.mkdtemp())
-        fake = mock.MagicMock()
-        fake.smart_money_netflows.return_value = NETFLOWS
-        fake.flow_intelligence.return_value = {"smart_trader_net_flow_usd": 9000, "smart_trader_wallet_count": 5}
-        fake.credits_used = 0
         prices = {"p": 1.0}
+        sm_on_good = {"flow": 1000.0}
+        http_calls = []
+
+        def fake_post(self, path, body, retries=3):
+            # Mirrors the real budget check, then returns canned API data.
+            if self.calls >= self.max_calls:
+                raise runner.NansenError("cap")
+            self.calls += 1
+            http_calls.append(path)
+            if body["filters"].get("token_address"):
+                return {"data": [{"token_address": GOOD, "net_flow_24h_usd": sm_on_good["flow"]}]}
+            return {"data": NETFLOWS}
 
         def quotes(tokens):
             base = dict(QUOTES)
             base[GOOD] = q(GOOD, price=prices["p"])
             return {t: base[t] for t in tokens if t in base}
 
-        with mock.patch.object(runner, "Nansen", return_value=fake), \
+        with mock.patch.object(nansen_mod.Nansen, "_post", fake_post), \
              mock.patch.object(runner, "get_quotes", side_effect=quotes):
             bot = runner.Bot(cfg)
             bot.notify = lambda m: None
-            bot.scan()
-            pos = bot.store.positions()
-            self.assertEqual([p.token for p in pos], [GOOD])
+
+            bot.run_once()  # nothing open: 1 call (scan), buys GOOD
+            self.assertEqual(http_calls, ["/smart-money/netflow"])
+            self.assertEqual([p.token for p in bot.store.positions()], [GOOD])
             self.assertEqual(bot.store.get("cash"), 950)
 
-            bot.scan()  # already holding: no duplicate buy
-            self.assertEqual(len(bot.store.positions()), 1)
-
-            fake.flow_intelligence.return_value = {"smart_trader_net_flow_usd": 1000}  # SM still fine
-            for price in (1.5, 2.2, 1.6):
+            for price in (1.5, 2.2):  # holding: exactly 2 calls per run, no duplicate buy
+                http_calls.clear()
                 prices["p"] = price
-                bot.manage()
+                bot.run_once()
+                self.assertEqual(len(http_calls), 2)
+                self.assertEqual(len(bot.store.positions()), 1)
+
+            prices["p"] = 1.6  # 27% off the 2.2 peak -> trailing stop
+            bot.run_once()
             self.assertEqual(bot.store.positions(), [])
             sell = [t for t in bot.store.trades() if t["side"] == "sell"][0]
             self.assertIn("trailing", sell["reason"])
             self.assertGreater(sell["pnl_usd"], 20)  # ~+50% minus fees on $50
 
-            bot.scan()  # cooldown blocks re-buying right away
+            bot.run_once()  # cooldown blocks re-buying right away
             self.assertEqual(bot.store.positions(), [])
+
+    def test_smart_money_exit_end_to_end(self):
+        cfg = load_settings()
+        cfg.nansen_api_key = "test"
+        cfg.data_dir = Path(tempfile.mkdtemp())
+
+        def fake_post(self, path, body, retries=3):
+            self.calls += 1
+            if body["filters"].get("token_address"):
+                return {"data": [{"token_address": GOOD, "net_flow_24h_usd": -20_000}]}
+            return {"data": NETFLOWS}
+
+        with mock.patch.object(nansen_mod.Nansen, "_post", fake_post), \
+             mock.patch.object(runner, "get_quotes", side_effect=lambda ts: {t: QUOTES[t] for t in ts if t in QUOTES}):
+            bot = runner.Bot(cfg)
+            bot.notify = lambda m: None
+            bot.run_once()
+            bot.run_once()
+            sell = [t for t in bot.store.trades() if t["side"] == "sell"][0]
+            self.assertIn("smart money exiting", sell["reason"])
 
 
 if __name__ == "__main__":

@@ -8,9 +8,14 @@ trading_mode = "paper"
 paper_starting_balance_usd = 1000.0
 
 [timing]
-scan_interval_min = 15          # how often to look for new entries (each scan costs Nansen credits)
-manage_interval_min = 2         # how often to check open positions' prices (free)
-smart_money_exit_check_min = 15 # how often to check Nansen flows on open positions
+scan_interval_min = 15          # always-on mode only: how often to look for new entries
+manage_interval_min = 2         # always-on mode only: how often to check prices (free)
+
+[nansen]
+# Hard cap on Nansen API calls per run. With 2, each run spends:
+#   1 call checking smart money on ALL open positions at once (skipped if none open)
+#   1 call scanning for new coins
+max_calls_per_run = 2
 
 [universe]
 max_token_age_days = 30
@@ -25,15 +30,15 @@ smart_money_labels = ["Fund", "Smart Trader", "30D Smart Trader", "90D Smart Tra
 # Smart money side: net buying over the window
 min_sm_netflow_24h_usd = 10000
 min_sm_trader_count = 3
-# Confirmation via Nansen flow intelligence on the token
-confirm_timeframe = "1d"        # 5m, 1h, 6h, 12h, 1d, 7d
-min_confirm_netflow_usd = 5000
-min_confirm_wallets = 3
 # Price side: price falling while they buy (the divergence)
 max_price_change_24h_pct = -15.0   # price must be down at least 15% over 24h
 max_price_change_6h_pct = 0.0      # and not already bouncing over 6h
-# Only send the top N candidates to the (credit-costing) confirmation step
-max_candidates_to_confirm = 8
+# Optional extra check per coin with Nansen flow intelligence. Off by default:
+# each check is one more call, and it only runs if max_calls_per_run leaves room.
+confirm_with_flow_intelligence = false
+confirm_timeframe = "1d"        # 5m, 1h, 6h, 12h, 1d, 7d
+min_confirm_netflow_usd = 5000
+min_confirm_wallets = 3
 
 [risk]
 position_size_usd = 50.0
@@ -49,8 +54,8 @@ trailing_activation_pct = 0.0    # trail only after this gain (0 = trail from en
 hard_stop_loss_pct = 35.0        # safety floor; in live mode also placed as a GMGN stop order
 # Follow smart money out
 exit_on_sm_outflow = true
-sm_exit_timeframe = "6h"
-sm_exit_netflow_usd = -5000      # sell if smart money net flow over the timeframe is below this
+sm_exit_window = "24h"           # 1h, 24h or 7d
+sm_exit_netflow_usd = -5000      # sell if smart money net flow over the window is below this
 max_hold_days = 14
 
 [gmgn]

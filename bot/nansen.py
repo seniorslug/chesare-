@@ -14,16 +14,32 @@ class NansenError(RuntimeError):
     pass
 
 
+class NansenBudget(NansenError):
+    """Raised instead of making a call once this run's call cap is used up."""
+
+
 class Nansen:
-    def __init__(self, api_key: str, timeout: int = 30):
+    def __init__(self, api_key: str, max_calls_per_run: int = 2, timeout: int = 30):
         if not api_key:
             raise NansenError("NANSEN_API_KEY is missing from .env")
         self.s = requests.Session()
         self.s.headers.update({"apiKey": api_key, "Content-Type": "application/json"})
         self.timeout = timeout
         self.credits_used = 0.0
+        self.max_calls = max_calls_per_run
+        self.calls = 0
+
+    def new_run(self) -> None:
+        self.calls = 0
+
+    @property
+    def calls_left(self) -> int:
+        return max(self.max_calls - self.calls, 0)
 
     def _post(self, path: str, body: dict, retries: int = 3) -> dict:
+        if self.calls >= self.max_calls:
+            raise NansenBudget(f"call cap of {self.max_calls} per run reached")
+        self.calls += 1  # counted once even if a 429 retry happens
         for attempt in range(retries):
             r = self.s.post(BASE + path, json=body, timeout=self.timeout)
             if r.status_code == 429:
@@ -58,6 +74,16 @@ class Nansen:
             "order_by": [{"field": "net_flow_24h_usd", "direction": "DESC"}],
         }
         return self._post("/smart-money/netflow", body).get("data", [])
+
+    def netflows_for_tokens(self, chain: str, tokens: list[str], labels: list[str]) -> dict[str, dict]:
+        """Smart money netflows for specific tokens, all in ONE call. Keyed by token address."""
+        body = {
+            "chains": [chain],
+            "filters": {"include_smart_money_labels": labels, "token_address": tokens},
+            "pagination": {"page": 1, "per_page": max(len(tokens), 10)},
+        }
+        rows = self._post("/smart-money/netflow", body).get("data", [])
+        return {r.get("token_address"): r for r in rows}
 
     def flow_intelligence(self, chain: str, token: str, timeframe: str) -> dict:
         """Smart trader net flow + wallet count for one token. Returns {} if none."""
