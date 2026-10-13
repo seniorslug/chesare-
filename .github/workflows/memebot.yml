@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: "*/30 * * * *"   # every 30 min (GitHub may delay scheduled runs at busy times)
   workflow_dispatch:          # "Run workflow" button for manual runs
+    inputs:
+      scan_now:
+        description: "Run a Nansen scan now (uses ~5-10 credits)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write             # lets the job save the (encrypted) trade database back to the repo
@@ -52,6 +57,7 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           LIVE_TRADING_CONFIRM: "no"   # live trading can't run here: GMGN needs a fixed whitelisted IP
+          SCAN_NOW: ${{ inputs.scan_now && '1' || '0' }}
         run: python main.py once
 
       - name: Save encrypted state

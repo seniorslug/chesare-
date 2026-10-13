@@ -109,7 +109,10 @@ def main() -> None:
     elif cmd in ("once", "run"):
         from bot.runner import Bot
         bot = Bot(cfg)
-        bot.run_once() if cmd == "once" else bot.run_forever()
+        if cmd == "once":
+            bot.run_once(force_nansen=os.environ.get("SCAN_NOW") == "1" or "--scan-now" in sys.argv)
+        else:
+            bot.run_forever()
     else:
         print(__doc__)
 
