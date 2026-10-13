@@ -188,7 +188,14 @@ class Bot:
         self.notify(f"{emoji} [{self.mode.upper()}] SELL {p.symbol} {pnl:+.2f} USD ({(fill / p.entry_price - 1) * 100:+.1f}%)\n{why}")
 
     # ---------- loop ----------
-    def run_once(self) -> None:
+    def run_once(self, force_nansen: bool = False) -> None:
+        every = self.cfg["nansen"].get("nansen_every_hours", 0) * 3600
+        last = self.store.get("last_nansen_run", 0)
+        if not force_nansen and time.time() - last < every:
+            self.manage(check_smart_money=False)
+            log.info("Price-only run (next Nansen run in %.1fh)", (last + every - time.time()) / 3600)
+            return
+        self.store.set("last_nansen_run", time.time())
         self.nansen.new_run()
         self.manage()
         self.scan()
@@ -202,7 +209,7 @@ class Bot:
         while True:
             try:
                 if time.time() - last_scan >= t["scan_interval_min"] * 60:
-                    self.run_once()  # Nansen calls only happen here, capped per run
+                    self.run_once(force_nansen=True)  # Nansen calls only happen here, capped per run
                     last_scan = time.time()
                 else:
                     self.manage(check_smart_money=False)  # free price checks in between

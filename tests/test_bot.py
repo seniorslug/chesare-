@@ -124,7 +124,7 @@ class PaperLoopTest(unittest.TestCase):
             bot = runner.Bot(cfg)
             bot.notify = lambda m: None
 
-            bot.run_once()  # nothing open: 1 call (scan), buys GOOD
+            bot.run_once(force_nansen=True)  # nothing open: 1 call (scan), buys GOOD
             self.assertEqual(http_calls, ["/smart-money/netflow"])
             self.assertEqual([p.token for p in bot.store.positions()], [GOOD])
             self.assertEqual(bot.store.get("cash"), 950)
@@ -132,18 +132,18 @@ class PaperLoopTest(unittest.TestCase):
             for price in (1.5, 2.2):  # holding: exactly 2 calls per run, no duplicate buy
                 http_calls.clear()
                 prices["p"] = price
-                bot.run_once()
+                bot.run_once(force_nansen=True)
                 self.assertEqual(len(http_calls), 2)
                 self.assertEqual(len(bot.store.positions()), 1)
 
             prices["p"] = 1.6  # 27% off the 2.2 peak -> trailing stop
-            bot.run_once()
+            bot.run_once(force_nansen=True)
             self.assertEqual(bot.store.positions(), [])
             sell = [t for t in bot.store.trades() if t["side"] == "sell"][0]
             self.assertIn("trailing", sell["reason"])
             self.assertGreater(sell["pnl_usd"], 20)  # ~+50% minus fees on $50
 
-            bot.run_once()  # cooldown blocks re-buying right away
+            bot.run_once(force_nansen=True)  # cooldown blocks re-buying right away
             self.assertEqual(bot.store.positions(), [])
 
     def test_smart_money_exit_end_to_end(self):
@@ -161,10 +161,38 @@ class PaperLoopTest(unittest.TestCase):
              mock.patch.object(runner, "get_quotes", side_effect=lambda ts: {t: QUOTES[t] for t in ts if t in QUOTES}):
             bot = runner.Bot(cfg)
             bot.notify = lambda m: None
-            bot.run_once()
-            bot.run_once()
+            bot.run_once(force_nansen=True)
+            bot.run_once(force_nansen=True)
             sell = [t for t in bot.store.trades() if t["side"] == "sell"][0]
             self.assertIn("smart money exiting", sell["reason"])
+
+
+class NansenScheduleTest(unittest.TestCase):
+    def test_price_only_runs_between_nansen_runs(self):
+        cfg = load_settings()
+        cfg.nansen_api_key = "test"
+        cfg.data_dir = Path(tempfile.mkdtemp())
+        calls = []
+
+        def fake_post(self, path, body, retries=3):
+            self.calls += 1
+            calls.append(path)
+            if body["filters"].get("token_address"):
+                return {"data": []}
+            return {"data": NETFLOWS}
+
+        with mock.patch.object(nansen_mod.Nansen, "_post", fake_post), \
+             mock.patch.object(runner, "get_quotes", side_effect=lambda ts: {t: QUOTES[t] for t in ts if t in QUOTES}):
+            bot = runner.Bot(cfg)
+            bot.notify = lambda m: None
+            bot.run_once()          # first run: Nansen
+            self.assertEqual(len(calls), 1)
+            for _ in range(5):      # next runs within 4h: prices only
+                bot.run_once()
+            self.assertEqual(len(calls), 1)
+            bot.store.set("last_nansen_run", time.time() - 5 * 3600)
+            bot.run_once()          # 4h later: Nansen again (2 calls, position open)
+            self.assertEqual(len(calls), 3)
 
 
 if __name__ == "__main__":

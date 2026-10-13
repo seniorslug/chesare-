@@ -16,6 +16,10 @@ manage_interval_min = 2         # always-on mode only: how often to check prices
 #   1 call checking smart money on ALL open positions at once (skipped if none open)
 #   1 call scanning for new coins
 max_calls_per_run = 2
+# Only call Nansen this often. Runs in between just check prices (free) for the
+# trailing and hard stops. Each call costs ~5 credits: every 4h with a position
+# open ≈ 12 calls/day ≈ 60 credits/day.
+nansen_every_hours = 4
 
 [universe]
 max_token_age_days = 30

@@ -57,7 +57,7 @@ Create a Telegram bot with @BotFather, put the token and your chat ID in `.env`.
 
 ## Nansen credits
 
-Hard cap: **2 Nansen calls per run** (`max_calls_per_run` in config.toml). One call checks smart money on all open positions together; one scans for new coins. With nothing open, a run uses 1. Price checks use DexScreener and cost nothing. The run log prints how many calls and credits each run used.
+Hard cap: **2 Nansen calls per run** (`max_calls_per_run` in config.toml). One call checks smart money on all open positions together; one scans for new coins. With nothing open, a run uses 1. Nansen is only called every 4 hours (`nansen_every_hours`); the runs in between only check prices, which use DexScreener and cost nothing. Each call costs about 5 credits. The run log prints how many calls and credits each run used.
 
 ## Going live (only after paper results earn it)
 
